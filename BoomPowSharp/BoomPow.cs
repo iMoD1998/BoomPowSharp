@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using MQTTnet;
@@ -13,13 +13,13 @@ using MQTTnet.Protocol;
 using System.Text.Json.Serialization;
 using System.Text.Json;
 using MQTTnet.Extensions.ManagedClient;
+using System.Diagnostics;
 
 namespace BoomPowSharp
 {
     class BoomPow : IDisposable
     {
-        private static readonly Regex       BanAddressRegex = new Regex("^(ban)_[13]{1}[13456789abcdefghijkmnopqrstuwxyz]{59}$");
-        private static readonly MqttFactory MqttFactory     = new MqttFactory();
+        private static readonly MqttFactory MqttFactory = new MqttFactory();
 
         //
         // MQTT related stuff
@@ -44,14 +44,13 @@ namespace BoomPowSharp
 
         public BoomPow(MqttClientOptionsBuilder BrokerMQTTOptions, Uri WorkUri, string PayoutAddress = "ban_1ncpdt1tbusi9n4c7pg6tqycgn4oxrnz5stug1iqyurorhwbc9gptrsmxkop", BoomPowWorkType WorkType = BoomPowWorkType.Any)
         {
-            if (!BanAddressRegex.IsMatch(PayoutAddress))
-                throw new ArgumentException("Give a valid ban address retard");
 
             BrokerMQTTOptions.WithKeepAlivePeriod(TimeSpan.FromMilliseconds(120));
 
             _BrokerMQTTOptions = new ManagedMqttClientOptionsBuilder().WithClientOptions(BrokerMQTTOptions)
                                                                       .WithAutoReconnectDelay(TimeSpan.FromSeconds(10))
                                                                       .Build();
+
 
             _MQTTClient = MqttFactory.CreateManagedMqttClient();
             _MQTTClient.ConnectedHandler = new MqttClientConnectedHandlerDelegate(BrokerOnConnected);
@@ -70,7 +69,7 @@ namespace BoomPowSharp
             _MQTTClient.Dispose();
         }
 
-        public async Task<bool> Init()
+        public async Task<bool> Run()
         {
             try
             {
@@ -125,16 +124,16 @@ namespace BoomPowSharp
             switch (Topics[0])
             {
                 case "work":
-                    await HandleWork(Topics[1], Message);
+                    HandleWork(Topics[1], Message);
                     break;
                 case "cancel":
-                    await HandleCancel(Message);
+                    HandleCancel(Message);
                     break;
                 case "heartbeat":
-                    await HandleHeartbeat();
+                    HandleHeartbeat();
                     break;
                 case "client":
-                    await HandleClientBlockAccepted(Topics[1], Message);
+                    HandleClientBlockAccepted(Topics[1], Message);
                     break;
             }
         }
@@ -149,6 +148,10 @@ namespace BoomPowSharp
         //
         public async Task HandleWork(string WorkType, string Message)
         {
+            var Timer = new Stopwatch();
+
+            Timer.Start();
+
             string[] WorkData   = Message.Split(',');
             string   BlockHash  = WorkData[0];
             string   Difficulty = WorkData[1];
@@ -170,7 +173,9 @@ namespace BoomPowSharp
                     .Build()
                  );
 
-                //await Console.Out.WriteLineAsync($"Solved Block {BlockHash}:{Response.WorkResult}:{Response.Difficulty}");
+                Timer.Stop();
+
+                await Console.Out.WriteLineAsync($"Solved block {BlockHash}:{Response.WorkResult}:{Response.Difficulty} - {Timer.Elapsed.TotalSeconds}s");
             }
         }
 
