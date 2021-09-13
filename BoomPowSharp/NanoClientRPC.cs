@@ -20,7 +20,21 @@ namespace BoomPowSharp
         private HttpClient _WebClient;
         private Uri _WorkerUri;
 
-        static JsonSerializerOptions SerializeOptions = new JsonSerializerOptions { WriteIndented = false };
+        static JsonSerializerOptions SerializeOptions = new JsonSerializerOptions { WriteIndented = false, IgnoreNullValues = true };
+
+        public class RPCRequest
+        {
+            [JsonPropertyName("action")]
+            public string Action { get; set; }
+        }
+
+        public class WorkGenerateRequest : RPCRequest
+        {
+            [JsonPropertyName("hash")]
+            public string BlockHash { get; set; }
+            [JsonPropertyName("difficulty")]
+            public string Difficulty { get; set; }
+        };
 
         public class WorkGenerateResponse
         {
@@ -34,6 +48,22 @@ namespace BoomPowSharp
             public string Multiplier { get; set; }
         };
 
+        public class WorkCancelRequest : RPCRequest
+        {
+            [JsonPropertyName("hash")]
+            public string BlockHash { get; set; }
+        };
+
+        public class WorkValidateRequest : RPCRequest
+        {
+            [JsonPropertyName("hash")]
+            public string BlockHash { get; set; }
+            [JsonPropertyName("work")]
+            public string WorkResult { get; set; }
+            [JsonPropertyName("difficulty")]
+            public string Difficulty { get; set; }
+        };
+
         public NanoClientRPC(Uri WorkerUri)
         {
             _WorkerUri = WorkerUri;
@@ -44,32 +74,35 @@ namespace BoomPowSharp
 
         public async Task<WorkGenerateResponse> WorkGenerate(string BlockHash, string Difficulty)
         {
-            var WorkGeneratePayload = new { 
-                action = "work_generate",
-                hash = BlockHash,
-                difficulty = Difficulty
+            var WorkGeneratePayload = new WorkGenerateRequest
+            {
+                Action = "work_generate",
+                BlockHash = BlockHash,
+                Difficulty = Difficulty
             };
 
-            var HttpResult = await _WebClient.PostAsync(_WorkerUri, new StringContent(JsonSerializer.Serialize(WorkGeneratePayload, SerializeOptions), Encoding.UTF8, "application/json"));
+            var HttpResult = await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions)));
 
             return await JsonSerializer.DeserializeAsync<WorkGenerateResponse>(await HttpResult.Content.ReadAsStreamAsync());
         }
 
-        public async Task<HttpResponseMessage> WorkCancel( string BlockHash )
+        public async Task WorkCancel( string BlockHash )
         {
-            var WorkGeneratePayload = new {
-                action = "work_cancel",
-                hash = BlockHash,
+            var WorkGeneratePayload = new WorkCancelRequest {
+                Action = "work_cancel",
+                BlockHash = BlockHash,
             };
 
-            return await _WebClient.PostAsync(_WorkerUri, new StringContent(JsonSerializer.Serialize(WorkGeneratePayload, SerializeOptions), Encoding.UTF8, "application/json"));
+            await _WebClient.PostAsync(_WorkerUri, new StringContent(JsonSerializer.Serialize(WorkGeneratePayload, SerializeOptions), Encoding.UTF8, "application/json"));
         }
 
-        public Task<HttpResponseMessage> WorkValidate( string BlockHash )
+        public Task<HttpResponseMessage> WorkValidate( string BlockHash, string WorkResult, string Difficulty)
         {
-            var WorkGeneratePayload = new {
-                action = "work_validate",
-                hash = BlockHash,
+            var WorkGeneratePayload = new WorkValidateRequest {
+                Action = "work_validate",
+                BlockHash = BlockHash,
+                WorkResult = WorkResult,
+                Difficulty = Difficulty
             };
 
             return _WebClient.PostAsync(_WorkerUri, new StringContent(JsonSerializer.Serialize(WorkGeneratePayload, SerializeOptions), Encoding.UTF8, "application/json"));
@@ -77,8 +110,8 @@ namespace BoomPowSharp
 
         public Task<HttpResponseMessage> Status( )
         {
-            var WorkGeneratePayload = new {
-                action = "status"
+            var WorkGeneratePayload = new RPCRequest {
+                Action = "status"
             };
 
             return _WebClient.PostAsync(_WorkerUri, new StringContent(JsonSerializer.Serialize(WorkGeneratePayload, SerializeOptions), Encoding.UTF8, "application/json"));

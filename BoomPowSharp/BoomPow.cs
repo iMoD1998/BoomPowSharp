@@ -35,6 +35,29 @@ namespace BoomPowSharp
             Any
         };
 
+        public class ClientBlockAcceptedMessage
+        {
+            [JsonPropertyName("precache")]
+            public string _NumPrecacheAccepted { get; set; }
+            [JsonPropertyName("ondemand")]
+            public string _NumOnDemandAccepted { get; set; }
+            [JsonPropertyName("total_credited")]
+            public string _NumWorkPaid { get; set; }
+            [JsonPropertyName("total_paid")]
+            public string _TotalPaid { get; set; }
+            [JsonPropertyName("payment_factor")]
+            public float PaymentFactor { get; set; }
+            [JsonPropertyName("percent_of_total")]
+            public float PercentageTotal { get; set; }
+            [JsonPropertyName("block_rewarded")]
+            public string BlockRewarded { get; set; }
+
+            public int NumPrecacheAccepted { get { return int.Parse(_NumPrecacheAccepted ?? "0"); } }
+            public int NumOnDemandAccepted { get { return int.Parse(_NumOnDemandAccepted ?? "0"); } }
+            public int NumWorkPaid { get { return int.Parse(_NumWorkPaid ?? "0"); } }
+            public float TotalPaid { get { return float.Parse(_TotalPaid ?? "0"); } }
+        };
+
         //
         // BoomPow/client related infomation
         //
@@ -98,7 +121,7 @@ namespace BoomPowSharp
             }
             catch (Exception e)
             {
-                await Console.Out.WriteLineAsync($"Failed to connect to broker: {e.Message}");
+                Console.WriteLine($"Failed to connect to broker: {e.Message}");
 
                 return false;
             }
@@ -108,12 +131,12 @@ namespace BoomPowSharp
 
         public async void BrokerOnConnected(MqttClientConnectedEventArgs Args)
         {
-            await Console.Out.WriteLineAsync("Connected to broker.");
+            Console.WriteLine("Connected to broker.");
         }
 
         public async void BrokerOnDisconnected(MqttClientDisconnectedEventArgs Args)
         {
-            await Console.Out.WriteLineAsync("Disconnected from broker.");
+            Console.WriteLine("Disconnected from broker.");
         }
 
         public async void BrokerOnMessageRecieved(MqttApplicationMessageReceivedEventArgs Args)
@@ -148,10 +171,6 @@ namespace BoomPowSharp
         //
         public async Task HandleWork(string WorkType, string Message)
         {
-            var Timer = new Stopwatch();
-
-            Timer.Start();
-
             string[] WorkData   = Message.Split(',');
             string   BlockHash  = WorkData[0];
             string   Difficulty = WorkData[1];
@@ -166,16 +185,13 @@ namespace BoomPowSharp
                     _PayoutAddress
                 });
 
-                await _MQTTClient.InternalClient.PublishAsync(new MqttApplicationMessageBuilder()
-                    .WithTopic($"result/{WorkType}")
-                    .WithPayload(Encoding.UTF8.GetBytes(ResultPayload))
-                    .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtMostOnce)
-                    .Build()
-                 );
+                await _MQTTClient.InternalClient.PublishAsync($"result/{WorkType}", ResultPayload, MqttQualityOfServiceLevel.AtMostOnce);
 
-                Timer.Stop();
-
-                await Console.Out.WriteLineAsync($"Solved block {BlockHash}:{Response.WorkResult}:{Response.Difficulty} - {Timer.Elapsed.TotalSeconds}s");
+                //Console.WriteLine($"Solved block {BlockHash}:{Response.WorkResult}:{Response.Difficulty}");
+            }
+            else
+            {
+                //Console.WriteLine($"Error: {Response.Error}");
             }
         }
 
@@ -184,34 +200,11 @@ namespace BoomPowSharp
             await _WorkServer.WorkCancel(Message);
         }
 
-        public class ClientBlockAcceptedMessage
-        {
-            [JsonPropertyName("precache")]
-            public string _NumPrecacheAccepted { get; set; }
-            [JsonPropertyName("ondemand")]
-            public string _NumOnDemandAccepted { get; set; }
-            [JsonPropertyName("total_credited")]
-            public string _NumWorkPaid { get; set; }
-            [JsonPropertyName("total_paid")]
-            public string _TotalPaid { get; set; }
-            [JsonPropertyName("payment_factor")]
-            public float PaymentFactor { get; set; }
-            [JsonPropertyName("percent_of_total")]
-            public float PercentageTotal { get; set; }
-            [JsonPropertyName("block_rewarded")]
-            public string BlockRewarded { get; set; }
-
-            public int NumPrecacheAccepted { get { return int.Parse(_NumPrecacheAccepted ?? "0"); } }
-            public int NumOnDemandAccepted { get { return int.Parse(_NumOnDemandAccepted ?? "0"); } }
-            public int NumWorkPaid { get { return int.Parse(_NumWorkPaid ?? "0"); } }
-            public float TotalPaid { get { return float.Parse(_TotalPaid ?? "0"); } }
-        };
-
         public async Task HandleClientBlockAccepted(string ClientAddress, string Message)
         {
             var StatsMessage = JsonSerializer.Deserialize<ClientBlockAcceptedMessage>(Message);
 
-            await Console.Out.WriteLineAsync($"Block accepted {StatsMessage.BlockRewarded} work units solved: {StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted} paid for: {StatsMessage.NumWorkPaid}");
+            Console.WriteLine($"Block accepted {StatsMessage.BlockRewarded} work units solved: {StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted} paid for: {StatsMessage.NumWorkPaid}");
 
             Console.Title = $"BoomPowSharp - Earnings: { StatsMessage.TotalPaid } OnDemand: { StatsMessage.NumOnDemandAccepted } Precache: { StatsMessage.NumPrecacheAccepted} Total: { StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted }";
         }
