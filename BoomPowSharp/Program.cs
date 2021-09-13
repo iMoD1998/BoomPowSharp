@@ -2,71 +2,106 @@
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using MQTTnet.Client.Options;
+using System.CommandLine;
+using System.CommandLine.Invocation;
+using System.IO;
+using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace BoomPowSharp
 {
     class Program
     {
-        public class WorkGenerateRequest
+        static string Banner = @"
+ ____                        ____                ____  _
+| __ )  ___   ___  _ __ ___ |  _ \ _____      __/ ___|| |__   __ _ _ __ _ __
+|  _ \ / _ \ / _ \| '_ ` _ \| |_) / _ \ \ /\ / /\___ \| '_ \ / _` | '__| '_ \
+| |_) | (_) | (_) | | | | | |  __/ (_) \ V  V /  ___) | | | | (_| | |  | |_) |
+|____/ \___/ \___/|_| |_| |_|_|   \___/ \_/\_/  |____/|_| |_|\__,_|_|  | .__/
+                                                                       |_|";
+
+        private static readonly Regex BanAddressRegex = new Regex("^(ban)_[13]{1}[13456789abcdefghijkmnopqrstuwxyz]{59}$");
+
+        static async Task<int> Main(string[] args)
         {
-            [JsonPropertyName("action")]
-            public string Action { get; set; }
+            RootCommand RootCommand = new RootCommand {
+                Description = ""
+            };
 
-            [JsonPropertyName("hash")]
-            public string BlockHash { get; set; }
+            RootCommand.Add(new Option<Uri>(
+                aliases: new string[] { "--worker-url", "-u" },
+                description: "URL of the nano work server.",
+                getDefaultValue: () => new Uri("http://127.0.0.1:20000")
+            ));
 
-            [JsonPropertyName("difficulty")]
-            public string Difficulty { get; set; }
-        }
+            RootCommand.Add(new Option<Uri>(
+                aliases: new string[] { "--server", "-s" },
+                description: "URL BoomPow MQTT server.",
+                getDefaultValue: () => new Uri("wss://client:client@bpow.banano.cc/mqtt")
+            ));
 
-        static async Task Main(string[] args)
-        {
-            //var Rand = new Random();
+            RootCommand.Add(new Option<string>(
+                aliases: new string[] { "--payout", "-p" },
+                description: "URL BoomPow MQTT server.",
+                getDefaultValue: () => "ban_1ncpdt1tbusi9n4c7pg6tqycgn4oxrnz5stug1iqyurorhwbc9gptrsmxkop"
+            ) { ArgumentHelpName = "BANANOADDDRESS" });
 
-            //var JsonText = await File.ReadAllTextAsync(@"C:\Users\iMoD1998\Desktop\NanoRequests.json");
+            RootCommand.Add(new Option<BoomPow.BoomPowWorkType>(
+                aliases: new string[] { "--work", "-w" },
+                description: "Desired work type. Options: any (default), ondemand, precache.",
+                getDefaultValue: () => BoomPow.BoomPowWorkType.Any
+            ) { ArgumentHelpName = "BANANOADDDRESS" });
 
-            //var Requests = JsonSerializer.Deserialize<List<WorkGenerateRequest>>(JsonText);
+            RootCommand.Handler = CommandHandler.Create<Uri, Uri, string, BoomPow.BoomPowWorkType>(async (workerUrl, server, payout, work) => { 
+                Console.WriteLine(Banner);
 
-            //NanoClientRPC NanoClientRPC = new NanoClientRPC(new Uri("http://127.0.0.1:20000"));
+                if(workerUrl.Scheme != Uri.UriSchemeHttp && workerUrl.Scheme != Uri.UriSchemeHttps)
+                {
+                    Console.WriteLine("Error: Worker only supports HTTP/HTTPS.");
+                    return;
+                }
 
-            //foreach (var Req in Requests.OrderBy(X => Rand.Next()).Take(1000))
-            //{
-            //    List<Task<HttpResponseMessage>> Tasks = new List<Task<HttpResponseMessage>>()
-            //    {
-            //        NanoClientRPC.WorkGenerate(Req.BlockHash, Req.Difficulty),
-            //        NanoClientRPC.WorkCancel(Req.BlockHash)
-            //    };
+                if (server.Scheme != "wss")
+                {
+                    Console.WriteLine("Error: Worker only supports websocket.");
+                    return;
+                }
 
-            //    while (Tasks.Any())
-            //    {
-            //        var FinishedTask = await Task.WhenAny(Tasks);
-            //        Tasks.Remove(FinishedTask);
-            //        await FinishedTask;
-            //    }
+                if (!BanAddressRegex.IsMatch(payout))
+                {
+                    Console.WriteLine("Error: Invalid wallet address.");
+                    return;
+                }
 
-            //    //Console.WriteLine($"Got Response in { stopWatch.Elapsed.TotalMilliseconds } ms { await Response.Content.ReadAsStringAsync() }");
-            //}
+                var Credentials = server.UserInfo == "" ? null : server.UserInfo.Split(":");
+                var Username = Credentials == null ? "" : Credentials[0];
+                var Password = Credentials == null ? "" : Credentials[1];
 
-            var Banner = @"
-                 ____                        ____                ____  _
-                | __ )  ___   ___  _ __ ___ |  _ \ _____      __/ ___|| |__   __ _ _ __ _ __
-                |  _ \ / _ \ / _ \| '_ ` _ \| |_) / _ \ \ /\ / /\___ \| '_ \ / _` | '__| '_ \
-                | |_) | (_) | (_) | | | | | |  __/ (_) \ V  V /  ___) | | | | (_| | |  | |_) |
-                |____/ \___/ \___/|_| |_| |_|_|   \___/ \_/\_/  |____/|_| |_|\__,_|_|  | .__/
-                                                                                       |_|";
+                var BrokerOptions = new MqttClientOptionsBuilder().WithCredentials(Username, Password)
+                                                                  .WithWebSocketServer($"{server.Host}:{server.Port}{server.LocalPath}")
+                                                                  .WithTls()
+                                                                  .WithCleanSession(false);
 
-            Console.WriteLine(Banner);
 
-            var BrokerOptions = new MqttClientOptionsBuilder().WithCredentials("client", "client")
-                                                              .WithWebSocketServer("bpow.banano.cc:443/mqtt")
-                                                              .WithTls()
-                                                              .WithCleanSession(false);
+                var BoomPow = new BoomPow(BrokerOptions, workerUrl);
 
-            var BoomPow = new BoomPow(BrokerOptions, new Uri("http://127.0.0.1:20000"));
+                Console.WriteLine("=======Config========");
+                Console.WriteLine($"Worker: {workerUrl}");
+                Console.WriteLine($"Server: {server}");
+                Console.WriteLine($"Payout Address: {payout}");
+                Console.WriteLine($"Desired Work: {work}");
+                Console.WriteLine("=====================");
 
-            await BoomPow.Init();
+                await BoomPow.Run();
 
-            Console.ReadKey();
+                while(true)
+                {
+                    Thread.Sleep(1000);
+                }
+            });
+
+
+            return await RootCommand.InvokeAsync(args);
         }
     }
 }
