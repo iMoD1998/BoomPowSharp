@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 using MQTTnet;
@@ -166,7 +166,7 @@ namespace BoomPowSharp
                     _PayoutAddress
                 });
 
-                await _MQTTClient.PublishAsync(new MqttApplicationMessageBuilder()
+                await _MQTTClient.InternalClient.PublishAsync(new MqttApplicationMessageBuilder()
                     .WithTopic($"result/{WorkType}")
                     .WithPayload(Encoding.UTF8.GetBytes(ResultPayload))
                     .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtMostOnce)
