@@ -123,14 +123,14 @@ namespace BoomPowSharp
 
                 if (_Verbose)
                 {
-                    SubscriberTopics.ForEach(X => Console.WriteLine($"Subscribing to {X.Topic} at QOS {((int)X.QualityOfServiceLevel)}"));
+                    SubscriberTopics.ForEach(X => Console.WriteLine($"[{DateTime.Now}][?] Subscribing to {X.Topic} at QOS {((int)X.QualityOfServiceLevel)}"));
                 }
 
                 await _MQTTClient.SubscribeAsync(SubscriberTopics.ToArray());
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Failed to connect to broker: {e.Message}");
+                Console.WriteLine($"[{DateTime.Now}][!] Error during startup {e.Message}");
 
                 return false;
             }
@@ -140,12 +140,12 @@ namespace BoomPowSharp
 
         public async void BrokerOnConnected(MqttClientConnectedEventArgs Args)
         {
-            Console.WriteLine("Connected to broker.");
+            Console.WriteLine($"[{DateTime.Now}][+] Connected to broker");
         }
 
         public async void BrokerOnDisconnected(MqttClientDisconnectedEventArgs Args)
         {
-            Console.WriteLine("Disconnected from broker.");
+            Console.WriteLine($"[{DateTime.Now}][!] Disconnected from broker");
         }
 
         public async void BrokerOnMessageRecieved(MqttApplicationMessageReceivedEventArgs Args)
@@ -171,13 +171,11 @@ namespace BoomPowSharp
                     HandleClientBlockAccepted(Topics[1], Message).ContinueWith(HandleException, TaskContinuationOptions.OnlyOnFaulted);
                     break;
             }
-
-            Args.IsHandled = true;
         }
 
         public void HandleException(Task HandlerTask)
         {
-            Console.WriteLine("Error: " + HandlerTask.Exception.Message);
+            Console.WriteLine($"[{DateTime.Now}][!] Exception in handler {HandlerTask.Exception.Message}");
         }
 
         //
@@ -208,14 +206,14 @@ namespace BoomPowSharp
 
                 if (_Verbose)
                 {
-                    Console.WriteLine($"Solved block {BlockHash}:{Response.WorkResult}:{Response.Difficulty}");
+                    Console.WriteLine($"[{DateTime.Now}][?] Solved block {BlockHash}:{Response.WorkResult}:{Response.Difficulty}");
                 }
             }
             else
             {
                 if (_Verbose)
                 {
-                    Console.WriteLine($"Error for block: {Response.Error}");
+                    Console.WriteLine($"[{DateTime.Now}][!] Error for block: {Response.Error}");
                 }
             }
         }
@@ -243,7 +241,7 @@ namespace BoomPowSharp
         {
             var StatsMessage = JsonSerializer.Deserialize<ClientBlockAcceptedMessage>(Message);
 
-            Console.WriteLine($"Block accepted {StatsMessage.BlockRewarded} work units solved: {StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted} paid for: {StatsMessage.NumWorkPaid}");
+            Console.WriteLine($"[{DateTime.Now}][+] Block accepted {StatsMessage.BlockRewarded.Substring(0, 32)}... {StatsMessage.NumWorkPaid}/{StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted} paid {StatsMessage.PercentageTotal*100.0f}% of next payout");
 
             Console.Title = $"BoomPowSharp - Earnings: { StatsMessage.TotalPaid } OnDemand: { StatsMessage.NumOnDemandAccepted } Precache: { StatsMessage.NumPrecacheAccepted} Total: { StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted }";
         }
