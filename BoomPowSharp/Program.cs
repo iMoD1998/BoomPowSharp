@@ -32,25 +32,30 @@ namespace BoomPowSharp
                 aliases: new string[] { "--worker-url", "-u" },
                 description: "URL of the nano work server.",
                 getDefaultValue: () => new Uri("http://127.0.0.1:20000")
-            ));
+           ) { ArgumentHelpName = "URL" });
 
             RootCommand.Add(new Option<Uri>(
                 aliases: new string[] { "--server", "-s" },
                 description: "URL BoomPow MQTT server.",
                 getDefaultValue: () => new Uri("wss://client:client@bpow.banano.cc/mqtt")
-            ));
+            ) { ArgumentHelpName = "URL" });
 
             RootCommand.Add(new Option<string>(
                 aliases: new string[] { "--payout", "-p" },
                 description: "URL BoomPow MQTT server.",
                 getDefaultValue: () => "ban_1ncpdt1tbusi9n4c7pg6tqycgn4oxrnz5stug1iqyurorhwbc9gptrsmxkop"
-            ) { ArgumentHelpName = "BANANOADDDRESS" });
+            ) { ArgumentHelpName = "Address" });
 
             RootCommand.Add(new Option<BoomPow.BoomPowWorkType>(
                 aliases: new string[] { "--work", "-w" },
                 description: "Desired work type. Options: any (default), ondemand, precache.",
                 getDefaultValue: () => BoomPow.BoomPowWorkType.Any
-            ) { ArgumentHelpName = "BANANOADDDRESS" });
+            ) { ArgumentHelpName = "WORKTYPE" });
+
+            RootCommand.Add(new Option(
+                aliases: new string[] { "--verbose", "-v" },
+                description: "Desired work type. Options: any (default), ondemand, precache."
+            ));
 
             RootCommand.Handler = CommandHandler.Create<Uri, Uri, string, BoomPow.BoomPowWorkType>(async (workerUrl, server, payout, work) => { 
                 Console.WriteLine(Banner);
