@@ -14,6 +14,7 @@ using System.Text.Json.Serialization;
 using System.Text.Json;
 using MQTTnet.Extensions.ManagedClient;
 using System.Diagnostics;
+using System.Collections.Concurrent;
 
 namespace BoomPowSharp
 {
@@ -34,6 +35,17 @@ namespace BoomPowSharp
             Precache,
             Any
         };
+
+        //
+        // BoomPow/client related infomation
+        //
+        NanoClientRPC   _WorkServer;
+        string          _PayoutAddress;
+        BoomPowWorkType _WorkType;
+
+        ConcurrentDictionary<string, DateTime> _GeneratedBlocks = new ConcurrentDictionary<string, DateTime>();
+
+        public NanoClientRPC WorkServer { get { return _WorkServer; } }
 
         public class ClientBlockAcceptedMessage
         {
@@ -57,15 +69,6 @@ namespace BoomPowSharp
             public int NumWorkPaid { get { return int.Parse(_NumWorkPaid ?? "0"); } }
             public float TotalPaid { get { return float.Parse(_TotalPaid ?? "0"); } }
         };
-
-        //
-        // BoomPow/client related infomation
-        //
-        NanoClientRPC   _WorkServer;
-        string          _PayoutAddress;
-        BoomPowWorkType _WorkType;
-
-        public NanoClientRPC WorkServer { get { return _WorkServer; } }
 
         public BoomPow(MqttClientOptionsBuilder BrokerMQTTOptions, Uri WorkUri, string PayoutAddress = "ban_1ncpdt1tbusi9n4c7pg6tqycgn4oxrnz5stug1iqyurorhwbc9gptrsmxkop", BoomPowWorkType WorkType = BoomPowWorkType.Any)
         {
@@ -141,35 +144,36 @@ namespace BoomPowSharp
             Console.WriteLine("Disconnected from broker.");
         }
 
-        public async Task BrokerOnMessageRecieved(MqttApplicationMessageReceivedEventArgs Args)
+        public async void BrokerOnMessageRecieved(MqttApplicationMessageReceivedEventArgs Args)
         {
-            try
-            {
-                string[] Topics = Args.ApplicationMessage.Topic.Split("/");
-                string Message = Args.ApplicationMessage.Payload == null ? "" : Encoding.UTF8.GetString(Args.ApplicationMessage.Payload);
+            string[] Topics = Args.ApplicationMessage.Topic.Split("/");
+            string Message = Args.ApplicationMessage.Payload == null ? "" : Encoding.UTF8.GetString(Args.ApplicationMessage.Payload);
 
-                switch (Topics[0])
-                {
-                    case "work":
-                        await HandleWork(Topics[1], Message);
-                        break;
-                    case "cancel":
-                        await HandleCancel(Message);
-                        break;
-                    case "heartbeat":
-                        await HandleHeartbeat();
-                        break;
-                    case "client":
-                        await HandleClientBlockAccepted(Topics[1], Message);
-                        break;
-                }
-            }
-            catch(Exception e)
+            //
+            // Dispatch the handlers without await to ensure they run parallell (assumption).
+            //
+            switch (Topics[0])
             {
-                Console.WriteLine("Error: " + e.Message);
+                case "work":
+                    HandleWork(Topics[1], Message).ContinueWith(HandleException, TaskContinuationOptions.OnlyOnFaulted);
+                    break;
+                case "cancel":
+                    HandleCancel(Message).ContinueWith(HandleException, TaskContinuationOptions.OnlyOnFaulted);
+                    break;
+                case "heartbeat":
+                    HandleHeartbeat();
+                    break;
+                case "client":
+                    HandleClientBlockAccepted(Topics[1], Message).ContinueWith(HandleException, TaskContinuationOptions.OnlyOnFaulted);
+                    break;
             }
 
             Args.IsHandled = true;
+        }
+
+        public void HandleException(Task HandlerTask)
+        {
+            Console.WriteLine("Error: " + HandlerTask.Exception.Message);
         }
 
         //
@@ -182,7 +186,6 @@ namespace BoomPowSharp
         //
         public async Task HandleWork(string WorkType, string Message)
         {
-            // BFEB8AA91D346E6EFBB41D11FD247E48E0BC0DBC183DDEB9F26F3A98AA17522F,ffffffc000000000
             string BlockHash  = Message.Substring(0, 64);
             string Difficulty = Message.Substring(65, 16);
 
@@ -192,7 +195,12 @@ namespace BoomPowSharp
             {
                 string ResultPayload = string.Join(',', BlockHash, Response.WorkResult, _PayoutAddress );
 
-                await _MQTTClient.InternalClient.PublishAsync($"result/{WorkType}", ResultPayload, MqttQualityOfServiceLevel.AtMostOnce);
+                await _MQTTClient.InternalClient.PublishAsync($"result/{WorkType}", ResultPayload, MqttQualityOfServiceLevel.AtMostOnce).ConfigureAwait(false);
+
+                //
+                // Add generated block to hashmap after sending result to ensure we dont add the latency of the lock etc.
+                //
+                _GeneratedBlocks.TryAdd(BlockHash, DateTime.Now);
 
                 //Console.WriteLine($"Solved block {BlockHash}:{Response.WorkResult}:{Response.Difficulty}");
             }
@@ -202,9 +210,23 @@ namespace BoomPowSharp
             }
         }
 
-        public async Task HandleCancel(string Message)
+        public async Task HandleCancel(string BlockHash)
         {
-            await _WorkServer.WorkCancel(Message);
+            //
+            // Dont cancel jobs we have already done.
+            // 
+            if(!_GeneratedBlocks.ContainsKey(BlockHash))
+            {
+                await _WorkServer.WorkCancel(BlockHash);
+            }
+            else
+            {
+                //
+                // Handled cancel request so remove entry from hashmap.
+                //
+                DateTime Old;
+                _GeneratedBlocks.TryRemove(BlockHash, out Old);
+            }
         }
 
         public async Task HandleClientBlockAccepted(string ClientAddress, string Message)

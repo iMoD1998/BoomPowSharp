@@ -87,7 +87,7 @@ namespace BoomPowSharp
                 Difficulty = Difficulty
             };
 
-            var HttpResult = await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions)));
+            var HttpResult = await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions))).ConfigureAwait(false);
 
             return await JsonSerializer.DeserializeAsync<WorkGenerateResponse>(await HttpResult.Content.ReadAsStreamAsync());
         }
@@ -99,7 +99,7 @@ namespace BoomPowSharp
                 BlockHash = BlockHash,
             };
 
-            await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions)));
+            await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions))).ConfigureAwait(false);
         }
 
         public async Task<HttpResponseMessage> WorkValidate( string BlockHash, string WorkResult, string Difficulty)
@@ -111,7 +111,7 @@ namespace BoomPowSharp
                 Difficulty = Difficulty
             };
 
-            return await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions)));
+            return await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions))).ConfigureAwait(false);
         }
 
         public async Task<StatusResponse> Status( )
@@ -120,7 +120,7 @@ namespace BoomPowSharp
                 Action = "status"
             };
 
-            var HttpResult = await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions)));
+            var HttpResult = await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions))).ConfigureAwait(false);
 
             return await JsonSerializer.DeserializeAsync<StatusResponse>(await HttpResult.Content.ReadAsStreamAsync());
         }
