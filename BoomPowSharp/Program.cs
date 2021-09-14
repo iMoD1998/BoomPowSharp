@@ -57,7 +57,7 @@ namespace BoomPowSharp
                 description: "Desired work type. Options: any (default), ondemand, precache."
             ));
 
-            RootCommand.Handler = CommandHandler.Create<Uri, Uri, string, BoomPow.BoomPowWorkType>(async (workerUrl, server, payout, work) => { 
+            RootCommand.Handler = CommandHandler.Create<Uri, Uri, string, BoomPow.BoomPowWorkType, bool>(async (workerUrl, server, payout, work, verbose) => { 
                 Console.WriteLine(Banner);
 
                 if(workerUrl.Scheme != Uri.UriSchemeHttp && workerUrl.Scheme != Uri.UriSchemeHttps)
@@ -88,7 +88,7 @@ namespace BoomPowSharp
                                                                   .WithCleanSession(false);
 
 
-                var BoomPow = new BoomPow(BrokerOptions, workerUrl);
+                var BoomPow = new BoomPow(BrokerOptions, workerUrl, payout, work, verbose);
 
                 Console.WriteLine("=======Config========");
                 Console.WriteLine($"Worker: {workerUrl}");

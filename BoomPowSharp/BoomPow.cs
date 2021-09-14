@@ -42,6 +42,7 @@ namespace BoomPowSharp
         NanoClientRPC   _WorkServer;
         string          _PayoutAddress;
         BoomPowWorkType _WorkType;
+        bool            _Verbose;
 
         ConcurrentDictionary<string, DateTime> _GeneratedBlocks = new ConcurrentDictionary<string, DateTime>();
 
@@ -70,7 +71,7 @@ namespace BoomPowSharp
             public float TotalPaid { get { return float.Parse(_TotalPaid ?? "0"); } }
         };
 
-        public BoomPow(MqttClientOptionsBuilder BrokerMQTTOptions, Uri WorkUri, string PayoutAddress = "ban_1ncpdt1tbusi9n4c7pg6tqycgn4oxrnz5stug1iqyurorhwbc9gptrsmxkop", BoomPowWorkType WorkType = BoomPowWorkType.Any)
+        public BoomPow(MqttClientOptionsBuilder BrokerMQTTOptions, Uri WorkUri, string PayoutAddress = "ban_1ncpdt1tbusi9n4c7pg6tqycgn4oxrnz5stug1iqyurorhwbc9gptrsmxkop", BoomPowWorkType WorkType = BoomPowWorkType.Any, bool Verbose = false)
         {
 
             BrokerMQTTOptions.WithKeepAlivePeriod(TimeSpan.FromMilliseconds(120));
@@ -89,7 +90,7 @@ namespace BoomPowSharp
 
             _PayoutAddress = PayoutAddress;
             _WorkType = WorkType;
-
+            _Verbose = Verbose;
         }
 
         public void Dispose()
@@ -120,7 +121,10 @@ namespace BoomPowSharp
                     new MqttTopicFilter{ Topic = $"priority_response/{_PayoutAddress}", QualityOfServiceLevel = MqttQualityOfServiceLevel.AtMostOnce },
                 };
 
-                SubscriberTopics.ForEach(X => Console.WriteLine($"Subscribing to {X.Topic} at QOS {((int)X.QualityOfServiceLevel)}"));
+                if (_Verbose)
+                {
+                    SubscriberTopics.ForEach(X => Console.WriteLine($"Subscribing to {X.Topic} at QOS {((int)X.QualityOfServiceLevel)}"));
+                }
 
                 await _MQTTClient.SubscribeAsync(SubscriberTopics.ToArray());
             }
@@ -191,9 +195,9 @@ namespace BoomPowSharp
 
             var Response = await _WorkServer.WorkGenerate(BlockHash, Difficulty);
 
-            if(Response.Error == null)
+            if (Response.Error == null)
             {
-                string ResultPayload = string.Join(',', BlockHash, Response.WorkResult, _PayoutAddress );
+                string ResultPayload = string.Join(',', BlockHash, Response.WorkResult, _PayoutAddress);
 
                 await _MQTTClient.InternalClient.PublishAsync($"result/{WorkType}", ResultPayload, MqttQualityOfServiceLevel.AtMostOnce).ConfigureAwait(false);
 
@@ -202,11 +206,17 @@ namespace BoomPowSharp
                 //
                 _GeneratedBlocks.TryAdd(BlockHash, DateTime.Now);
 
-                //Console.WriteLine($"Solved block {BlockHash}:{Response.WorkResult}:{Response.Difficulty}");
+                if (_Verbose)
+                {
+                    Console.WriteLine($"Solved block {BlockHash}:{Response.WorkResult}:{Response.Difficulty}");
+                }
             }
             else
             {
-                //Console.WriteLine($"Error: {Response.Error}");
+                if (_Verbose)
+                {
+                    Console.WriteLine($"Error for block: {Response.Error}");
+                }
             }
         }
 
