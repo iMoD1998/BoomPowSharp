@@ -2,7 +2,8 @@ FROM mcr.microsoft.com/dotnet/sdk:3.1.412-alpine3.13 AS build-env
 WORKDIR /src
 COPY . ./
 RUN cd BoomPowSharp && dotnet restore
-RUN dotnet publish -c Release -o out
+RUN dotnet publish -c Release -o out -r alpine-x64 -p:SelfContained=true -p:PublishSingleFile=true -p:PublishSingleFile=true -p:PublishReadyToRun=true
+RUN ls out
 
 FROM mcr.microsoft.com/dotnet/runtime:3.1.18-alpine3.13 AS run-env
 WORKDIR /app
