@@ -172,6 +172,8 @@ namespace BoomPowSharp
             Args.IsHandled = true;
         }
 
+        private string LastGeneratedBlockHash;
+
         //
         // work/precache, work/ondemand
         // These topics are used by the server to publish new work for clients. Clients can choose to subscribe to precache work, on-demand work, or both.
@@ -187,6 +189,7 @@ namespace BoomPowSharp
             string Difficulty = Message.Substring(65, 16);
 
             var Response = await _WorkServer.WorkGenerate(BlockHash, Difficulty);
+            LastGeneratedBlockHash = BlockHash;
 
             if(Response.Error == null)
             {
@@ -204,7 +207,8 @@ namespace BoomPowSharp
 
         public async Task HandleCancel(string Message)
         {
-            await _WorkServer.WorkCancel(Message);
+            if (Message != LastGeneratedBlockHash)
+                await _WorkServer.WorkCancel(Message);
         }
 
         public async Task HandleClientBlockAccepted(string ClientAddress, string Message)
