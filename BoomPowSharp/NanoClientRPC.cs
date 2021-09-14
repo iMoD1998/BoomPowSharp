@@ -12,9 +12,7 @@ namespace BoomPowSharp
     {
         private SocketsHttpHandler _SocketHTTPHandler = new SocketsHttpHandler
         {
-            PooledConnectionLifetime    = TimeSpan.FromMinutes(10),
-            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
-            MaxConnectionsPerServer     = 40
+            MaxConnectionsPerServer     = 10
         };
 
         private HttpClient _WebClient;
@@ -64,6 +62,14 @@ namespace BoomPowSharp
             public string Difficulty { get; set; }
         };
 
+        public class StatusResponse
+        {
+            [JsonPropertyName("generating")]
+            public string NumGenerating { get; set; }
+            [JsonPropertyName("queue_size")]
+            public string NumQueue { get; set; }
+        };
+
         public NanoClientRPC(Uri WorkerUri)
         {
             _WorkerUri = WorkerUri;
@@ -93,10 +99,10 @@ namespace BoomPowSharp
                 BlockHash = BlockHash,
             };
 
-            await _WebClient.PostAsync(_WorkerUri, new StringContent(JsonSerializer.Serialize(WorkGeneratePayload, SerializeOptions), Encoding.UTF8, "application/json"));
+            await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions)));
         }
 
-        public Task<HttpResponseMessage> WorkValidate( string BlockHash, string WorkResult, string Difficulty)
+        public async Task<HttpResponseMessage> WorkValidate( string BlockHash, string WorkResult, string Difficulty)
         {
             var WorkGeneratePayload = new WorkValidateRequest {
                 Action = "work_validate",
@@ -105,16 +111,18 @@ namespace BoomPowSharp
                 Difficulty = Difficulty
             };
 
-            return _WebClient.PostAsync(_WorkerUri, new StringContent(JsonSerializer.Serialize(WorkGeneratePayload, SerializeOptions), Encoding.UTF8, "application/json"));
+            return await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions)));
         }
 
-        public Task<HttpResponseMessage> Status( )
+        public async Task<StatusResponse> Status( )
         {
             var WorkGeneratePayload = new RPCRequest {
                 Action = "status"
             };
 
-            return _WebClient.PostAsync(_WorkerUri, new StringContent(JsonSerializer.Serialize(WorkGeneratePayload, SerializeOptions), Encoding.UTF8, "application/json"));
+            var HttpResult = await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions)));
+
+            return await JsonSerializer.DeserializeAsync<StatusResponse>(await HttpResult.Content.ReadAsStreamAsync());
         }
     }
 }

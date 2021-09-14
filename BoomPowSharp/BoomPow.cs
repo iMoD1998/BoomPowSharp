@@ -65,6 +65,8 @@ namespace BoomPowSharp
         string          _PayoutAddress;
         BoomPowWorkType _WorkType;
 
+        public NanoClientRPC WorkServer { get { return _WorkServer; } }
+
         public BoomPow(MqttClientOptionsBuilder BrokerMQTTOptions, Uri WorkUri, string PayoutAddress = "ban_1ncpdt1tbusi9n4c7pg6tqycgn4oxrnz5stug1iqyurorhwbc9gptrsmxkop", BoomPowWorkType WorkType = BoomPowWorkType.Any)
         {
 
@@ -87,7 +89,7 @@ namespace BoomPowSharp
 
         }
 
-        public async void Dispose()
+        public void Dispose()
         {
             _MQTTClient.Dispose();
         }
@@ -139,26 +141,35 @@ namespace BoomPowSharp
             Console.WriteLine("Disconnected from broker.");
         }
 
-        public async void BrokerOnMessageRecieved(MqttApplicationMessageReceivedEventArgs Args)
+        public async Task BrokerOnMessageRecieved(MqttApplicationMessageReceivedEventArgs Args)
         {
-            string[] Topics  = Args.ApplicationMessage.Topic.Split("/");
-            string   Message = Args.ApplicationMessage.Payload == null ? "" : Encoding.UTF8.GetString(Args.ApplicationMessage.Payload);
-
-            switch (Topics[0])
+            try
             {
-                case "work":
-                    HandleWork(Topics[1], Message);
-                    break;
-                case "cancel":
-                    HandleCancel(Message);
-                    break;
-                case "heartbeat":
-                    HandleHeartbeat();
-                    break;
-                case "client":
-                    HandleClientBlockAccepted(Topics[1], Message);
-                    break;
+                string[] Topics = Args.ApplicationMessage.Topic.Split("/");
+                string Message = Args.ApplicationMessage.Payload == null ? "" : Encoding.UTF8.GetString(Args.ApplicationMessage.Payload);
+
+                switch (Topics[0])
+                {
+                    case "work":
+                        await HandleWork(Topics[1], Message);
+                        break;
+                    case "cancel":
+                        await HandleCancel(Message);
+                        break;
+                    case "heartbeat":
+                        await HandleHeartbeat();
+                        break;
+                    case "client":
+                        await HandleClientBlockAccepted(Topics[1], Message);
+                        break;
+                }
             }
+            catch(Exception e)
+            {
+                Console.WriteLine("Error: " + e.Message);
+            }
+
+            Args.IsHandled = true;
         }
 
         //
@@ -171,19 +182,15 @@ namespace BoomPowSharp
         //
         public async Task HandleWork(string WorkType, string Message)
         {
-            string[] WorkData   = Message.Split(',');
-            string   BlockHash  = WorkData[0];
-            string   Difficulty = WorkData[1];
+            // BFEB8AA91D346E6EFBB41D11FD247E48E0BC0DBC183DDEB9F26F3A98AA17522F,ffffffc000000000
+            string BlockHash  = Message.Substring(0, 64);
+            string Difficulty = Message.Substring(65, 16);
 
             var Response = await _WorkServer.WorkGenerate(BlockHash, Difficulty);
 
             if(Response.Error == null)
             {
-                string ResultPayload = string.Join(',', new string[] {
-                    BlockHash,
-                    Response.WorkResult,
-                    _PayoutAddress
-                });
+                string ResultPayload = string.Join(',', BlockHash, Response.WorkResult, _PayoutAddress );
 
                 await _MQTTClient.InternalClient.PublishAsync($"result/{WorkType}", ResultPayload, MqttQualityOfServiceLevel.AtMostOnce);
 
