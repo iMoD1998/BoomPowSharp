@@ -96,7 +96,16 @@ namespace BoomPowSharp
 
                 while(true)
                 {
-                    Thread.Sleep(1000);
+                    try
+                    {
+                        var Stats = await BoomPow.WorkServer.Status();
+                    }
+                    catch
+                    {
+                        Console.WriteLine("Error: Work server not responding.");
+                    }
+
+                    Thread.Sleep(10000);
                 }
             });
 
