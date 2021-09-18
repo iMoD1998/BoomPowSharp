@@ -7,6 +7,10 @@ using System.CommandLine.Invocation;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Text.Json;
+using static BoomPowSharp.NanoClientRPC;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace BoomPowSharp
 {
@@ -21,6 +25,22 @@ namespace BoomPowSharp
                                                                        |_|";
 
         private static readonly Regex BanAddressRegex = new Regex("^(ban)_[13]{1}[13456789abcdefghijkmnopqrstuwxyz]{59}$");
+
+        static IEnumerable<string> WholeChunks(string str, int chunkSize)
+        {
+            for (int i = 0; i < str.Length; i += chunkSize)
+                yield return str.Substring(i, chunkSize);
+        }
+
+        public static byte[] FromHex(string hex)
+        {
+            byte[] raw = new byte[hex.Length / 2];
+            for (int i = 0; i < raw.Length; i++)
+            {
+                raw[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+            }
+            return raw;
+        }
 
         static async Task<int> Main(string[] args)
         {
@@ -57,10 +77,10 @@ namespace BoomPowSharp
                 description: "Desired work type. Options: any (default), ondemand, precache."
             ));
 
-            RootCommand.Handler = CommandHandler.Create<Uri, Uri, string, BoomPow.BoomPowWorkType, bool>(async (workerUrl, server, payout, work, verbose) => { 
+            RootCommand.Handler = CommandHandler.Create<Uri, Uri, string, BoomPow.BoomPowWorkType, bool>(async (workerUrl, server, payout, work, verbose) => {
                 Console.WriteLine(Banner);
 
-                if(workerUrl.Scheme != Uri.UriSchemeHttp && workerUrl.Scheme != Uri.UriSchemeHttps)
+                if (workerUrl.Scheme != Uri.UriSchemeHttp && workerUrl.Scheme != Uri.UriSchemeHttps)
                 {
                     Console.WriteLine("Error: Worker only supports HTTP/HTTPS.");
                     return;
@@ -99,7 +119,7 @@ namespace BoomPowSharp
 
                 await BoomPow.Run();
 
-                while(true)
+                while (true)
                 {
                     try
                     {
@@ -112,8 +132,33 @@ namespace BoomPowSharp
 
                     Thread.Sleep(10000);
                 }
+
+                Console.ReadKey();
             });
 
+            //NanoCUDA Gpu = new NanoCUDA(0);
+
+            //var Rand = new Random();
+
+            //var JsonText = await File.ReadAllTextAsync(@"C:\Users\iMoD1998\Desktop\NanoRequests.json");
+
+            //var Requests = JsonSerializer.Deserialize<List<WorkGenerateRequest>>(JsonText);
+
+            //List<Task<ulong>> Tasks = new List<Task<ulong>>(); 
+
+            //foreach (var Req in Requests.OrderBy(X => Rand.Next()).Take(1000))
+            //{
+            //    Tasks.Add(Task.Run(() => {
+            //        var Bytes = FromHex(Req.BlockHash);
+            //        var Result = Gpu.WorkGenerate(Bytes, ulong.Parse(Req.Difficulty, System.Globalization.NumberStyles.AllowHexSpecifier));
+            //        Console.WriteLine($"Generated {Result.ToString("X16")} for {Req.BlockHash}");
+            //        return Result;
+            //    }));
+            //}
+
+            //await Task.WhenAll(Tasks);
+
+            //Console.ReadKey();
 
             return await RootCommand.InvokeAsync(args);
         }

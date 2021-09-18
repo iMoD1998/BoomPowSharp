@@ -15,6 +15,7 @@ using System.Text.Json;
 using MQTTnet.Extensions.ManagedClient;
 using System.Diagnostics;
 using System.Collections.Concurrent;
+using System.Threading;
 
 namespace BoomPowSharp
 {
@@ -40,11 +41,12 @@ namespace BoomPowSharp
         // BoomPow/client related infomation
         //
         NanoClientRPC   _WorkServer;
+        NanoCUDA        _CUDAWorker;
         string          _PayoutAddress;
         BoomPowWorkType _WorkType;
         bool            _Verbose;
 
-        ConcurrentDictionary<string, DateTime> _GeneratedBlocks = new ConcurrentDictionary<string, DateTime>();
+        ConcurrentDictionary<string, CancellationTokenSource> _GeneratedBlocks = new ConcurrentDictionary<string, CancellationTokenSource>();
 
         public NanoClientRPC WorkServer { get { return _WorkServer; } }
 
@@ -86,6 +88,7 @@ namespace BoomPowSharp
             _MQTTClient.ApplicationMessageReceivedHandler = new MqttApplicationMessageReceivedHandlerDelegate(BrokerOnMessageRecieved);
 
             _WorkServer = new NanoClientRPC(WorkUri);
+            _CUDAWorker = new NanoCUDA(0);
 
             _PayoutAddress = PayoutAddress;
             _WorkType = WorkType;
@@ -187,27 +190,30 @@ namespace BoomPowSharp
 
             //Console.WriteLine($"Got work {BlockHash}:{Difficulty}");
 
-            var Response = await _WorkServer.WorkGenerate(BlockHash, Difficulty);
+            CancellationTokenSource Token = new CancellationTokenSource();
 
-            if (Response.Error == null)
+            _GeneratedBlocks.TryAdd(BlockHash, Token);
+
+            var Result = await Task.Run(() => _CUDAWorker.WorkGenerate(Program.FromHex(BlockHash), ulong.Parse(Difficulty, System.Globalization.NumberStyles.AllowHexSpecifier), Token.Token) );
+
+            if (Result != 0)
             {
-                await _MQTTClient.InternalClient.PublishAsync($"result/{WorkType}", string.Join(',', BlockHash, Response.WorkResult, _PayoutAddress), MqttQualityOfServiceLevel.AtMostOnce).ConfigureAwait(false);
+                await _MQTTClient.InternalClient.PublishAsync($"result/{WorkType}", string.Join(',', BlockHash, Result.ToString("x16"), _PayoutAddress), MqttQualityOfServiceLevel.AtMostOnce).ConfigureAwait(false);
 
                 //
                 // Add generated block to hashmap after sending result to ensure we dont add the latency of the lock etc.
                 //
-                _GeneratedBlocks.TryAdd(BlockHash, DateTime.Now);
 
-                if (_Verbose)
+                //if (_Verbose)
                 {
-                    Console.WriteLine($"[{DateTime.Now}][?] Solved block {BlockHash}:{Response.WorkResult}:{Response.Difficulty}");
+                    Console.WriteLine($"[{DateTime.Now}][?] Solved block {BlockHash}:{Result.ToString("x16")}:{Difficulty}");
                 }
             }
             else
             {
                 if (_Verbose)
                 {
-                    Console.WriteLine($"[{DateTime.Now}][!] Error for block: {Response.Error}");
+                    //Console.WriteLine($"[{DateTime.Now}][!] Error for block: {Response.Error}");
                 }
             }
         }
@@ -217,17 +223,26 @@ namespace BoomPowSharp
             //
             // Dont cancel jobs we have already done.
             // 
-            if(!_GeneratedBlocks.ContainsKey(BlockHash))
+            //if(!_GeneratedBlocks.ContainsKey(BlockHash))
+            //{
+            //    await _WorkServer.WorkCancel(BlockHash);
+            //}
+            //else
+            //{
+            //    //
+            //    // Handled cancel request so remove entry from hashmap.
+            //    //
+            //    DateTime Old;
+            //    _GeneratedBlocks.TryRemove(BlockHash, out Old);
+            //}
+
+            if (_GeneratedBlocks.ContainsKey(BlockHash))
             {
-                await _WorkServer.WorkCancel(BlockHash);
-            }
-            else
-            {
-                //
-                // Handled cancel request so remove entry from hashmap.
-                //
-                DateTime Old;
-                _GeneratedBlocks.TryRemove(BlockHash, out Old);
+                CancellationTokenSource Old;
+
+                _GeneratedBlocks.TryGetValue(BlockHash, out Old);
+
+                Old.Cancel();
             }
         }
 
