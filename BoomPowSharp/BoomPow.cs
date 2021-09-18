@@ -18,7 +18,7 @@ using System.Collections.Concurrent;
 
 namespace BoomPowSharp
 {
-    class BoomPow : IDisposable
+    class BoomPow
     {
         private static readonly MqttFactory MqttFactory = new MqttFactory();
 
@@ -80,7 +80,6 @@ namespace BoomPowSharp
                                                                       .WithAutoReconnectDelay(TimeSpan.FromSeconds(10))
                                                                       .Build();
 
-
             _MQTTClient = MqttFactory.CreateManagedMqttClient();
             _MQTTClient.ConnectedHandler = new MqttClientConnectedHandlerDelegate(BrokerOnConnected);
             _MQTTClient.DisconnectedHandler = new MqttClientDisconnectedHandlerDelegate(BrokerOnDisconnected);
@@ -91,11 +90,6 @@ namespace BoomPowSharp
             _PayoutAddress = PayoutAddress;
             _WorkType = WorkType;
             _Verbose = Verbose;
-        }
-
-        public void Dispose()
-        {
-            _MQTTClient.Dispose();
         }
 
         public async Task<bool> Run()
@@ -151,7 +145,7 @@ namespace BoomPowSharp
         public async void BrokerOnMessageRecieved(MqttApplicationMessageReceivedEventArgs Args)
         {
             string[] Topics = Args.ApplicationMessage.Topic.Split("/");
-            string Message = Args.ApplicationMessage.Payload == null ? "" : Encoding.UTF8.GetString(Args.ApplicationMessage.Payload);
+            string Message  = Args.ApplicationMessage.Payload == null ? "" : Encoding.UTF8.GetString(Args.ApplicationMessage.Payload);
 
             //
             // Dispatch the handlers without await to ensure they run parallell (assumption).
@@ -168,7 +162,7 @@ namespace BoomPowSharp
                     HandleHeartbeat();
                     break;
                 case "client":
-                    HandleClientBlockAccepted(Topics[1], Message).ContinueWith(HandleException, TaskContinuationOptions.OnlyOnFaulted);
+                    HandleClientBlockAccepted(Topics[1], Message);
                     break;
             }
         }
@@ -191,13 +185,13 @@ namespace BoomPowSharp
             string BlockHash  = Message.Substring(0, 64);
             string Difficulty = Message.Substring(65, 16);
 
+            //Console.WriteLine($"Got work {BlockHash}:{Difficulty}");
+
             var Response = await _WorkServer.WorkGenerate(BlockHash, Difficulty);
 
             if (Response.Error == null)
             {
-                string ResultPayload = string.Join(',', BlockHash, Response.WorkResult, _PayoutAddress);
-
-                await _MQTTClient.InternalClient.PublishAsync($"result/{WorkType}", ResultPayload, MqttQualityOfServiceLevel.AtMostOnce).ConfigureAwait(false);
+                await _MQTTClient.InternalClient.PublishAsync($"result/{WorkType}", string.Join(',', BlockHash, Response.WorkResult, _PayoutAddress), MqttQualityOfServiceLevel.AtMostOnce).ConfigureAwait(false);
 
                 //
                 // Add generated block to hashmap after sending result to ensure we dont add the latency of the lock etc.
@@ -237,16 +231,16 @@ namespace BoomPowSharp
             }
         }
 
-        public async Task HandleClientBlockAccepted(string ClientAddress, string Message)
+        public void HandleClientBlockAccepted(string ClientAddress, string Message)
         {
             var StatsMessage = JsonSerializer.Deserialize<ClientBlockAcceptedMessage>(Message);
 
-            Console.WriteLine($"[{DateTime.Now}][+] Block accepted {StatsMessage.BlockRewarded.Substring(0, 32)}... {StatsMessage.NumWorkPaid}/{StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted} paid {StatsMessage.PercentageTotal*100.0f}% of next payout");
+            Console.WriteLine($"[{DateTime.Now}][+] Block accepted {StatsMessage.BlockRewarded.Substring(0, 32)}... {StatsMessage.NumWorkPaid}/{StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted} paid {(StatsMessage.PercentageTotal*100.0f).ToString("0.00")}% of next payout");
 
             Console.Title = $"BoomPowSharp - Earnings: { StatsMessage.TotalPaid } OnDemand: { StatsMessage.NumOnDemandAccepted } Precache: { StatsMessage.NumPrecacheAccepted} Total: { StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted }";
         }
 
-        public async Task HandleHeartbeat()
+        public void HandleHeartbeat()
         {
             _LastServerHeartbeat = DateTime.Now;
         }
