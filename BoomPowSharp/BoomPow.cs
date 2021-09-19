@@ -172,7 +172,7 @@ namespace BoomPowSharp
 
         public void HandleException(Task HandlerTask)
         {
-            Console.WriteLine($"[{DateTime.Now}][!] Exception in handler {HandlerTask.Exception.Message}");
+            Console.WriteLine($"[{DateTime.Now}][!] Exception in handler {HandlerTask.Exception.Message} {HandlerTask.Exception.StackTrace}");
         }
 
         //
@@ -188,25 +188,26 @@ namespace BoomPowSharp
             string BlockHash  = Message.Substring(0, 64);
             string Difficulty = Message.Substring(65, 16);
 
-            //Console.WriteLine($"Got work {BlockHash}:{Difficulty}");
-
             CancellationTokenSource Token = new CancellationTokenSource();
 
             _GeneratedBlocks.TryAdd(BlockHash, Token);
 
-            var Result = await Task.Run(() => _CUDAWorker.WorkGenerate(Program.FromHex(BlockHash), ulong.Parse(Difficulty, System.Globalization.NumberStyles.AllowHexSpecifier), Token.Token) );
+            Stopwatch sw = Stopwatch.StartNew();
+
+            var Result = _CUDAWorker.WorkGenerate(Program.FromHex(BlockHash), ulong.Parse(Difficulty, System.Globalization.NumberStyles.AllowHexSpecifier), Token.Token);
+
+            sw.Stop();
 
             if (Result != 0)
             {
                 await _MQTTClient.InternalClient.PublishAsync($"result/{WorkType}", string.Join(',', BlockHash, Result.ToString("x16"), _PayoutAddress), MqttQualityOfServiceLevel.AtMostOnce).ConfigureAwait(false);
-
                 //
                 // Add generated block to hashmap after sending result to ensure we dont add the latency of the lock etc.
                 //
 
-                //if (_Verbose)
+                if (_Verbose)
                 {
-                    Console.WriteLine($"[{DateTime.Now}][?] Solved block {BlockHash}:{Result.ToString("x16")}:{Difficulty}");
+                    Console.WriteLine($"[{DateTime.Now}][?] Solved block {BlockHash}:{Result.ToString("x16")}:{Difficulty} in {sw.ElapsedMilliseconds} ms Queue: {_GeneratedBlocks.Count}");
                 }
             }
             else
@@ -216,6 +217,8 @@ namespace BoomPowSharp
                     //Console.WriteLine($"[{DateTime.Now}][!] Error for block: {Response.Error}");
                 }
             }
+
+            _GeneratedBlocks.TryRemove(BlockHash, out Token);
         }
 
         public async Task HandleCancel(string BlockHash)
@@ -236,12 +239,10 @@ namespace BoomPowSharp
             //    _GeneratedBlocks.TryRemove(BlockHash, out Old);
             //}
 
-            if (_GeneratedBlocks.ContainsKey(BlockHash))
+            CancellationTokenSource Old;
+
+            if( _GeneratedBlocks.TryGetValue(BlockHash, out Old) )
             {
-                CancellationTokenSource Old;
-
-                _GeneratedBlocks.TryGetValue(BlockHash, out Old);
-
                 Old.Cancel();
             }
         }

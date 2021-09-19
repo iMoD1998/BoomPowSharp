@@ -21,7 +21,7 @@
     <PackageReference Include="ManagedCuda-11" Version="11.4.47" />
     <PackageReference Include="MQTTnet" Version="3.0.16" />
     <PackageReference Include="MQTTnet.Extensions.ManagedClient" Version="3.0.16" />
-    <PackageReference Include="Silk.NET.OpenCL" Version="2.8.0" />
+    <PackageReference Include="SauceControl.Blake2Fast" Version="2.0.0" />
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta1.21308.1" />
     <PackageReference Include="XoshiroPRNG.Net" Version="1.6.0" />
   </ItemGroup>
