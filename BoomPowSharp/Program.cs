@@ -57,7 +57,13 @@ namespace BoomPowSharp
                 description: "Desired work type. Options: any (default), ondemand, precache."
             ));
 
-            RootCommand.Handler = CommandHandler.Create<Uri, Uri, string, BoomPow.BoomPowWorkType, bool>(async (workerUrl, server, payout, work, verbose) => { 
+            RootCommand.Add(new Option<string>(
+               aliases: new string[] { "--min-difficulty", "-d" },
+               description: "Desired work type. Options: any (default), ondemand, precache.",
+               getDefaultValue: () => "0"
+           ));
+
+            RootCommand.Handler = CommandHandler.Create<Uri, Uri, string, BoomPow.BoomPowWorkType, bool, string>(async (workerUrl, server, payout, work, verbose, minDifficulty) => { 
                 Console.WriteLine(Banner);
 
                 if(workerUrl.Scheme != Uri.UriSchemeHttp && workerUrl.Scheme != Uri.UriSchemeHttps)
@@ -87,31 +93,17 @@ namespace BoomPowSharp
                                                                   .WithTls()
                                                                   .WithCleanSession(false);
 
-
-                var BoomPow = new BoomPow(BrokerOptions, workerUrl, payout, work, verbose);
+                var BoomPow = new BoomPow(BrokerOptions, workerUrl, payout, work, Convert.ToUInt64(minDifficulty, 16), verbose);
 
                 Console.WriteLine("=======Config========");
                 Console.WriteLine($"Worker: {workerUrl}");
                 Console.WriteLine($"Server: {server}");
                 Console.WriteLine($"Payout Address: {payout}");
                 Console.WriteLine($"Desired Work: {work}");
+                Console.WriteLine($"Min Difficulty: {minDifficulty}");
                 Console.WriteLine("=====================");
 
                 await BoomPow.Run();
-
-                while(true)
-                {
-                    try
-                    {
-                        var Stats = await BoomPow.WorkServer.Status();
-                    }
-                    catch
-                    {
-                        Console.WriteLine("Error: Work server not responding.");
-                    }
-
-                    Thread.Sleep(10000);
-                }
             });
 
 

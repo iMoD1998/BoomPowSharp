@@ -20,35 +20,7 @@ namespace BoomPowSharp
 {
     class BoomPow
     {
-        private static readonly MqttFactory MqttFactory = new MqttFactory();
-
-        //
-        // MQTT related stuff
-        //
-        IManagedMqttClientOptions _BrokerMQTTOptions;
-        IManagedMqttClient        _MQTTClient;
-        DateTime                  _LastServerHeartbeat;
-
-        public enum BoomPowWorkType
-        {
-            OnDemand,
-            Precache,
-            Any
-        };
-
-        //
-        // BoomPow/client related infomation
-        //
-        NanoClientRPC   _WorkServer;
-        string          _PayoutAddress;
-        BoomPowWorkType _WorkType;
-        bool            _Verbose;
-
-        ConcurrentDictionary<string, DateTime> _GeneratedBlocks = new ConcurrentDictionary<string, DateTime>();
-
-        public NanoClientRPC WorkServer { get { return _WorkServer; } }
-
-        public class ClientBlockAcceptedMessage
+        public class MQTTClientBlockRewardedMessage
         {
             [JsonPropertyName("precache")]
             public string _NumPrecacheAccepted { get; set; }
@@ -65,13 +37,50 @@ namespace BoomPowSharp
             [JsonPropertyName("block_rewarded")]
             public string BlockRewarded { get; set; }
 
+            //
+            // Conversions
+            //
+            [JsonIgnore]
             public int NumPrecacheAccepted { get { return int.Parse(_NumPrecacheAccepted ?? "0"); } }
+            [JsonIgnore]
             public int NumOnDemandAccepted { get { return int.Parse(_NumOnDemandAccepted ?? "0"); } }
+            [JsonIgnore]
             public int NumWorkPaid { get { return int.Parse(_NumWorkPaid ?? "0"); } }
+            [JsonIgnore]
             public float TotalPaid { get { return float.Parse(_TotalPaid ?? "0"); } }
         };
 
-        public BoomPow(MqttClientOptionsBuilder BrokerMQTTOptions, Uri WorkUri, string PayoutAddress = "ban_1ncpdt1tbusi9n4c7pg6tqycgn4oxrnz5stug1iqyurorhwbc9gptrsmxkop", BoomPowWorkType WorkType = BoomPowWorkType.Any, bool Verbose = false)
+        public enum BoomPowWorkType
+        {
+            OnDemand,
+            Precache,
+            Any
+        };
+
+        private static readonly MqttFactory MqttFactory = new MqttFactory();
+
+        //
+        // MQTT related stuff
+        //
+        private IManagedMqttClientOptions _BrokerMQTTOptions;
+        private IManagedMqttClient        _MQTTClient;
+        private DateTime                  _LastServerHeartbeat;
+
+        //
+        // BoomPow/client related infomation
+        //
+        private NanoClientRPC   _WorkServer;
+        private string          _PayoutAddress;
+        private BoomPowWorkType _WorkType;
+        private bool            _Verbose;
+        private ulong           _MinDifficulty;
+
+        ConcurrentDictionary<string, DateTime> _GeneratedBlocks = new ConcurrentDictionary<string, DateTime>();
+
+        public NanoClientRPC WorkServer { get { return _WorkServer; } }
+
+
+        public BoomPow(MqttClientOptionsBuilder BrokerMQTTOptions, Uri WorkUri, string PayoutAddress = "ban_1ncpdt1tbusi9n4c7pg6tqycgn4oxrnz5stug1iqyurorhwbc9gptrsmxkop", BoomPowWorkType WorkType = BoomPowWorkType.Any, ulong MinDifficulty = 0, bool Verbose = false)
         {
 
             BrokerMQTTOptions.WithKeepAlivePeriod(TimeSpan.FromMilliseconds(120));
@@ -89,10 +98,11 @@ namespace BoomPowSharp
 
             _PayoutAddress = PayoutAddress;
             _WorkType = WorkType;
+            _MinDifficulty = MinDifficulty;
             _Verbose = Verbose;
         }
 
-        public async Task<bool> Run()
+        public async Task Run()
         {
             try
             {
@@ -121,31 +131,46 @@ namespace BoomPowSharp
                 }
 
                 await _MQTTClient.SubscribeAsync(SubscriberTopics.ToArray());
+
+                //
+                // Get priority queue
+                //
+                await _MQTTClient.PublishAsync($"get_priority/{_WorkType.ToString().ToLower()}", _PayoutAddress, MqttQualityOfServiceLevel.AtMostOnce);
             }
             catch (Exception e)
             {
                 Console.WriteLine($"[{DateTime.Now}][!] Error during startup {e.Message}");
-
-                return false;
             }
 
-            return true;
+            while (true)
+            {
+                try
+                {
+                    var Stats = await _WorkServer.GetStatus();
+                }
+                catch
+                {
+                    Console.WriteLine("Error: Work server not responding.");
+                }
+
+                await Task.Delay(5000);
+            }
         }
 
-        public async void BrokerOnConnected(MqttClientConnectedEventArgs Args)
+        public void BrokerOnConnected(MqttClientConnectedEventArgs Args)
         {
             Console.WriteLine($"[{DateTime.Now}][+] Connected to broker");
         }
 
-        public async void BrokerOnDisconnected(MqttClientDisconnectedEventArgs Args)
+        public void BrokerOnDisconnected(MqttClientDisconnectedEventArgs Args)
         {
             Console.WriteLine($"[{DateTime.Now}][!] Disconnected from broker");
         }
 
-        public async void BrokerOnMessageRecieved(MqttApplicationMessageReceivedEventArgs Args)
+        public void BrokerOnMessageRecieved(MqttApplicationMessageReceivedEventArgs Args)
         {
-            string[] Topics = Args.ApplicationMessage.Topic.Split("/");
-            string Message  = Args.ApplicationMessage.Payload == null ? "" : Encoding.UTF8.GetString(Args.ApplicationMessage.Payload);
+            string[] Topics  = Args.ApplicationMessage.Topic.Split("/");
+            string   Message = Args.ApplicationMessage.Payload == null ? "" : Encoding.UTF8.GetString(Args.ApplicationMessage.Payload);
 
             //
             // Dispatch the handlers without await to ensure they run parallell (assumption).
@@ -162,9 +187,11 @@ namespace BoomPowSharp
                     HandleHeartbeat();
                     break;
                 case "client":
-                    HandleClientBlockAccepted(Topics[1], Message);
+                    HandleClientBlockRewarded(Topics[1], Message);
                     break;
             }
+
+            //Console.WriteLine($"{DateTime.Now}][?] TOPIC:{Args.ApplicationMessage.Topic} MSG:{Message}");
         }
 
         public void HandleException(Task HandlerTask)
@@ -185,9 +212,28 @@ namespace BoomPowSharp
             string BlockHash  = Message.Substring(0, 64);
             string Difficulty = Message.Substring(65, 16);
 
-            //Console.WriteLine($"Got work {BlockHash}:{Difficulty}");
+            if (_Verbose)
+            {
+                Console.WriteLine($"[{DateTime.Now}][?] Got block {BlockHash}:{Difficulty}");
+            }
 
-            var Response = await _WorkServer.WorkGenerate(BlockHash, Difficulty);
+            if(Convert.ToUInt64(Difficulty, 16) < _MinDifficulty)
+            {
+                if (_Verbose)
+                {
+                    Console.WriteLine($"[{DateTime.Now}][?] Ignoring block {BlockHash}:{Difficulty}");
+                }
+                
+                _GeneratedBlocks.TryAdd(BlockHash, DateTime.Now);
+
+                return;
+            }
+
+            var StopWatch = Stopwatch.StartNew();
+
+            var Response = await _WorkServer.GenerateWork(BlockHash, Difficulty);
+
+            StopWatch.Stop();
 
             if (Response.Error == null)
             {
@@ -200,7 +246,7 @@ namespace BoomPowSharp
 
                 if (_Verbose)
                 {
-                    Console.WriteLine($"[{DateTime.Now}][?] Solved block {BlockHash}:{Response.WorkResult}:{Response.Difficulty}");
+                    Console.WriteLine($"[{DateTime.Now}][?] Solved block {BlockHash}:{Response.WorkResult}:{Response.Difficulty} in {StopWatch.ElapsedMilliseconds}ms");
                 }
             }
             else
@@ -214,35 +260,32 @@ namespace BoomPowSharp
 
         public async Task HandleCancel(string BlockHash)
         {
+            DateTime Old;
+
             //
             // Dont cancel jobs we have already done.
             // 
-            if(!_GeneratedBlocks.ContainsKey(BlockHash))
+            if (!_GeneratedBlocks.TryRemove(BlockHash, out Old))
             {
-                await _WorkServer.WorkCancel(BlockHash);
-            }
-            else
-            {
-                //
-                // Handled cancel request so remove entry from hashmap.
-                //
-                DateTime Old;
-                _GeneratedBlocks.TryRemove(BlockHash, out Old);
+                await _WorkServer.CancelWork(BlockHash);
             }
         }
 
-        public void HandleClientBlockAccepted(string ClientAddress, string Message)
+        public void HandleClientBlockRewarded(string ClientAddress, string Message)
         {
-            var StatsMessage = JsonSerializer.Deserialize<ClientBlockAcceptedMessage>(Message);
+            var StatsMessage = JsonSerializer.Deserialize<MQTTClientBlockRewardedMessage>(Message);
 
-            Console.WriteLine($"[{DateTime.Now}][+] Block accepted {StatsMessage.BlockRewarded.Substring(0, 32)}... {StatsMessage.NumWorkPaid}/{StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted} paid {(StatsMessage.PercentageTotal*100.0f).ToString("0.00")}% of next payout");
-
-            Console.Title = $"BoomPowSharp - Earnings: { StatsMessage.TotalPaid } OnDemand: { StatsMessage.NumOnDemandAccepted } Precache: { StatsMessage.NumPrecacheAccepted} Total: { StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted }";
+            Console.WriteLine($"[{DateTime.Now}][+] Block rewarded {StatsMessage.BlockRewarded}... {StatsMessage.NumWorkPaid}/{StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted} paid {(StatsMessage.PercentageTotal*100.0f).ToString("0.00")}% of next payout");
         }
 
         public void HandleHeartbeat()
         {
             _LastServerHeartbeat = DateTime.Now;
+
+            if(_Verbose)
+            {
+                Console.WriteLine($"[{DateTime.Now}][?] Heartbeat");
+            }
         }
     }
 }
