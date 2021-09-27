@@ -22,7 +22,7 @@ namespace BoomPowSharp
 
         private static readonly Regex BanAddressRegex = new Regex("^(ban)_[13]{1}[13456789abcdefghijkmnopqrstuwxyz]{59}$");
 
-        static async Task<int> Main(string[] args)
+        static int Main(string[] args)
         {
             RootCommand RootCommand = new RootCommand {
                 Description = ""
@@ -72,7 +72,7 @@ namespace BoomPowSharp
                     return;
                 }
 
-                if (server.Scheme != "wss")
+                if (server.Scheme != "wss" && server.Scheme != "ws")
                 {
                     Console.WriteLine("Error: Worker only supports websocket.");
                     return;
@@ -90,10 +90,9 @@ namespace BoomPowSharp
 
                 var BrokerOptions = new MqttClientOptionsBuilder().WithCredentials(Username, Password)
                                                                   .WithWebSocketServer($"{server.Host}:{server.Port}{server.LocalPath}")
-                                                                  .WithTls()
                                                                   .WithCleanSession(false);
 
-                var BoomPow = new BoomPow(BrokerOptions, workerUrl, payout, work, Convert.ToUInt64(minDifficulty, 16), verbose);
+                var BoomPow = new BoomPow(server.Scheme == "wss" ? BrokerOptions.WithTls() : BrokerOptions, workerUrl, payout, work, Convert.ToUInt64(minDifficulty, 16), verbose);
 
                 Console.WriteLine("=======Config========");
                 Console.WriteLine($"Worker: {workerUrl}");
@@ -107,7 +106,7 @@ namespace BoomPowSharp
             });
 
 
-            return await RootCommand.InvokeAsync(args);
+            return RootCommand.Invoke(args);
         }
     }
 }
