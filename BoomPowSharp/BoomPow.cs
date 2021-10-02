@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using MQTTnet;
@@ -80,7 +80,7 @@ namespace BoomPowSharp
         public NanoClientRPC WorkServer { get { return _WorkServer; } }
 
 
-        public BoomPow(MqttClientOptionsBuilder BrokerMQTTOptions, Uri WorkUri, string PayoutAddress = "ban_1ncpdt1tbusi9n4c7pg6tqycgn4oxrnz5stug1iqyurorhwbc9gptrsmxkop", BoomPowWorkType WorkType = BoomPowWorkType.Any, ulong MinDifficulty = 0, bool Verbose = false)
+        public BoomPow(MqttClientOptionsBuilder BrokerMQTTOptions, Uri WorkUri, string PayoutAddress, BoomPowWorkType WorkType = BoomPowWorkType.Any, ulong MinDifficulty = 0, bool Verbose = false)
         {
 
             BrokerMQTTOptions.WithKeepAlivePeriod(TimeSpan.FromMilliseconds(120));

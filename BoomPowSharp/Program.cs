@@ -43,7 +43,7 @@ namespace BoomPowSharp
             RootCommand.Add(new Option<string>(
                 aliases: new string[] { "--payout", "-p" },
                 description: "URL BoomPow MQTT server.",
-                getDefaultValue: () => "ban_1ncpdt1tbusi9n4c7pg6tqycgn4oxrnz5stug1iqyurorhwbc9gptrsmxkop"
+                getDefaultValue: () => "ban_1mod19984d47idnf5cepfcsrdhey56dhtgn6omba4sk4dfs97xacyrppb9pi"
             ) { ArgumentHelpName = "Address" });
 
             RootCommand.Add(new Option<BoomPow.BoomPowWorkType>(
