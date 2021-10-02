@@ -1,24 +1,25 @@
-using System;
-using System.Collections.Generic;
-using System.Text;
+﻿using System.Text;
 using MQTTnet;
 using MQTTnet.Client;
 using MQTTnet.Client.Connecting;
 using MQTTnet.Client.Disconnecting;
 using MQTTnet.Client.Receiving;
 using MQTTnet.Client.Options;
-using System.Threading.Tasks;
-using System.Text.RegularExpressions;
 using MQTTnet.Protocol;
 using System.Text.Json.Serialization;
 using System.Text.Json;
 using MQTTnet.Extensions.ManagedClient;
 using System.Diagnostics;
 using System.Collections.Concurrent;
+using static BoomPowSharp.NanoClientRPC;
+using System;
+using System.Threading.Tasks;
+using System.Threading;
+using System.Collections.Generic;
 
 namespace BoomPowSharp
 {
-    class BoomPow
+    class BoomPow : IDisposable
     {
         public class MQTTClientBlockRewardedMessage
         {
@@ -50,6 +51,14 @@ namespace BoomPowSharp
             public float TotalPaid { get { return float.Parse(_TotalPaid ?? "0"); } }
         };
 
+        public class MQTTClientPriorityMessage
+        {
+            [JsonPropertyName("precache")]
+            public string PrecachePriorityIndex { get; set; }
+            [JsonPropertyName("ondemand")]
+            public string OnDemandPriorityIndex { get; set; }
+        }
+
         public enum BoomPowWorkType
         {
             OnDemand,
@@ -59,21 +68,27 @@ namespace BoomPowSharp
 
         private static readonly MqttFactory MqttFactory = new MqttFactory();
 
+        public const string DeveloperAddress = "ban_1mod19984d47idnf5cepfcsrdhey56dhtgn6omba4sk4dfs97xacyrppb9pi";
+
         //
         // MQTT related stuff
         //
         private IManagedMqttClientOptions _BrokerMQTTOptions;
-        private IManagedMqttClient        _MQTTClient;
-        private DateTime                  _LastServerHeartbeat;
+        private IManagedMqttClient _MQTTClient;
+        private DateTime _LastServerHeartbeat;
 
         //
         // BoomPow/client related infomation
         //
-        private NanoClientRPC   _WorkServer;
-        private string          _PayoutAddress;
+        private NanoClientRPC _WorkServer;
+        private string _PayoutAddress;
         private BoomPowWorkType _WorkType;
-        private bool            _Verbose;
-        private ulong           _MinDifficulty;
+        private bool _Verbose;
+        private ulong _MinDifficulty;
+
+        private static uint SolvedBlockNumber = 0;
+
+        Dictionary<string, Func<string[], string, Task>> MessageDispatchHandlers = new Dictionary<string, Func<string[], string, Task>>();
 
         ConcurrentDictionary<string, DateTime> _GeneratedBlocks = new ConcurrentDictionary<string, DateTime>();
 
@@ -95,11 +110,21 @@ namespace BoomPowSharp
             _MQTTClient.ApplicationMessageReceivedHandler = new MqttApplicationMessageReceivedHandlerDelegate(BrokerOnMessageRecieved);
 
             _WorkServer = new NanoClientRPC(WorkUri);
-
             _PayoutAddress = PayoutAddress;
             _WorkType = WorkType;
             _MinDifficulty = MinDifficulty;
             _Verbose = Verbose;
+
+            MessageDispatchHandlers.Add("work", HandleWork);
+            MessageDispatchHandlers.Add("cancel", HandleCancel);
+            MessageDispatchHandlers.Add("heartbeat", HandleHeartbeat);
+            MessageDispatchHandlers.Add("client", HandleClientBlockRewarded);
+            MessageDispatchHandlers.Add("priority_response", HandlePriority);
+        }
+
+        public void Dispose()
+        {
+            //_MQTTClient.PublishAsync()
         }
 
         public async Task Run()
@@ -111,10 +136,10 @@ namespace BoomPowSharp
                 //
                 // TODO: make this nicer.
                 //
-                var DesiredWorkTopicName   = _WorkType == BoomPowWorkType.Any      ? "work/#" :
+                var DesiredWorkTopicName =   _WorkType == BoomPowWorkType.Any ? "work/#" :
                                              _WorkType == BoomPowWorkType.OnDemand ? "work/ondemand/#" : "work/precache/#";
 
-                var DesiredCancelTopicName = _WorkType == BoomPowWorkType.Any      ? "cancel/#" :
+                var DesiredCancelTopicName = _WorkType == BoomPowWorkType.Any ? "cancel/#" :
                                              _WorkType == BoomPowWorkType.OnDemand ? "cancel/ondemand" : "cancel/precache";
 
                 var SubscriberTopics = new List<MqttTopicFilter>() {
@@ -131,11 +156,6 @@ namespace BoomPowSharp
                 }
 
                 await _MQTTClient.SubscribeAsync(SubscriberTopics.ToArray());
-
-                //
-                // Get priority queue
-                //
-                await _MQTTClient.PublishAsync($"get_priority/{_WorkType.ToString().ToLower()}", _PayoutAddress, MqttQualityOfServiceLevel.AtMostOnce);
             }
             catch (Exception e)
             {
@@ -146,7 +166,14 @@ namespace BoomPowSharp
             {
                 try
                 {
-                    var Stats = await _WorkServer.GetStatus();
+                    if (_MQTTClient.IsConnected)
+                    {
+                        await _WorkServer.GetStatus();
+                        await RequestPriority();
+                        //await _MQTTClient.PingAsync(CancellationToken.None);
+                    }
+
+                    Console.Title = ($"Current Threads {ThreadPool.ThreadCount}");
                 }
                 catch
                 {
@@ -167,63 +194,62 @@ namespace BoomPowSharp
             Console.WriteLine($"[{DateTime.Now}][!] Disconnected from broker");
         }
 
-        public void BrokerOnMessageRecieved(MqttApplicationMessageReceivedEventArgs Args)
+        public async void BrokerOnMessageRecieved(MqttApplicationMessageReceivedEventArgs Args)
         {
-            string[] Topics  = Args.ApplicationMessage.Topic.Split("/");
-            string   Message = Args.ApplicationMessage.Payload == null ? "" : Encoding.UTF8.GetString(Args.ApplicationMessage.Payload);
+            string[] TopicPath = Args.ApplicationMessage.Topic.Split("/");
+            string Message     = Args.ApplicationMessage.Payload == null ? "" : Encoding.UTF8.GetString(Args.ApplicationMessage.Payload);
 
-            //
-            // Dispatch the handlers without await to ensure they run parallell (assumption).
-            //
-            switch (Topics[0])
-            {
-                case "work":
-                    HandleWork(Topics[1], Message).ContinueWith(HandleException, TaskContinuationOptions.OnlyOnFaulted);
-                    break;
-                case "cancel":
-                    HandleCancel(Message).ContinueWith(HandleException, TaskContinuationOptions.OnlyOnFaulted);
-                    break;
-                case "heartbeat":
-                    HandleHeartbeat();
-                    break;
-                case "client":
-                    HandleClientBlockRewarded(Topics[1], Message);
-                    break;
-            }
+            MessageDispatchHandlers[TopicPath[0]](TopicPath, Message).ContinueWith((HandlerTask) => {
+                Console.WriteLine($"[{DateTime.Now}][!] Exception in handler {TopicPath[0]} {HandlerTask.Exception.Message}");
+            }, TaskContinuationOptions.OnlyOnFaulted);
 
             //Console.WriteLine($"{DateTime.Now}][?] TOPIC:{Args.ApplicationMessage.Topic} MSG:{Message}");
         }
 
-        public void HandleException(Task HandlerTask)
+        async Task RequestPriority()
         {
-            Console.WriteLine($"[{DateTime.Now}][!] Exception in handler {HandlerTask.Exception.Message}");
+            await _MQTTClient.PublishAsync($"get_priority/{_WorkType.ToString().ToLower()}", _PayoutAddress, MqttQualityOfServiceLevel.AtMostOnce);
         }
 
-        //
-        // work/precache, work/ondemand
-        // These topics are used by the server to publish new work for clients. Clients can choose to subscribe to precache work, on-demand work, or both.
-        //
-        // Message format:
-        //
-        // block_hash,difficulty
-        //
-        public async Task HandleWork(string WorkType, string Message)
+        async Task SubmitWork(string WorkType, string BlockHash, string WorkResult)
         {
+            //
+            // For every 100 solves, send 1 for developer.
+            //
+            bool SubmitForDev = Interlocked.Increment(ref SolvedBlockNumber) % 100 == 0;
+
+            var WalletAddress = SubmitForDev ? DeveloperAddress : _PayoutAddress;
+
+            //
+            // Send result to broker.
+            //
+            await _MQTTClient.InternalClient.PublishAsync($"result/{WorkType}", string.Join(',', BlockHash, WorkResult, WalletAddress), MqttQualityOfServiceLevel.AtMostOnce).ConfigureAwait(false);
+
+            if (_Verbose)
+            {
+                Console.WriteLine($"[{DateTime.Now}][?] Sent block {BlockHash}:{WorkResult} dev {SubmitForDev}");
+            }
+        }
+
+        public async Task HandleWork(string[] TopicPath, string Message)
+        {
+            int    QueueIndex = int.Parse(TopicPath[2]);
+            string WorkType   = TopicPath[1];
             string BlockHash  = Message.Substring(0, 64);
             string Difficulty = Message.Substring(65, 16);
 
             if (_Verbose)
             {
-                Console.WriteLine($"[{DateTime.Now}][?] Got block {BlockHash}:{Difficulty}");
+                Console.WriteLine($"[{DateTime.Now}][?] Got block {WorkType}/{QueueIndex} {BlockHash}:{Difficulty}");
             }
 
-            if(Convert.ToUInt64(Difficulty, 16) < _MinDifficulty)
+            if (ulong.Parse(Difficulty, System.Globalization.NumberStyles.HexNumber) < _MinDifficulty)
             {
                 if (_Verbose)
                 {
                     Console.WriteLine($"[{DateTime.Now}][?] Ignoring block {BlockHash}:{Difficulty}");
                 }
-                
+
                 _GeneratedBlocks.TryAdd(BlockHash, DateTime.Now);
 
                 return;
@@ -237,7 +263,7 @@ namespace BoomPowSharp
 
             if (Response.Error == null)
             {
-                await _MQTTClient.InternalClient.PublishAsync($"result/{WorkType}", string.Join(',', BlockHash, Response.WorkResult, _PayoutAddress), MqttQualityOfServiceLevel.AtMostOnce).ConfigureAwait(false);
+                await SubmitWork(WorkType, BlockHash, Response.WorkResult);
 
                 //
                 // Add generated block to hashmap after sending result to ensure we dont add the latency of the lock etc.
@@ -258,31 +284,43 @@ namespace BoomPowSharp
             }
         }
 
-        public async Task HandleCancel(string BlockHash)
+        public async Task HandlePriority(string[] TopicPath, string Message)
+        {
+            var Queues = JsonSerializer.Deserialize<MQTTClientPriorityMessage>(Message);
+
+            if (_Verbose)
+            {
+                Console.WriteLine($"[{DateTime.Now}][?] Priority response: {Message}");
+            }
+        }
+
+        public async Task HandleCancel(string[] TopicPath, string Message)
         {
             DateTime Old;
 
             //
             // Dont cancel jobs we have already done.
             // 
-            if (!_GeneratedBlocks.TryRemove(BlockHash, out Old))
+            if (!_GeneratedBlocks.TryRemove(Message, out Old))
             {
-                await _WorkServer.CancelWork(BlockHash);
+                await _WorkServer.CancelWork(Message);
             }
         }
 
-        public void HandleClientBlockRewarded(string ClientAddress, string Message)
+        public async Task HandleClientBlockRewarded(string[] TopicPath, string Message)
         {
+            string ClientWalletAddress = TopicPath[1];
+
             var StatsMessage = JsonSerializer.Deserialize<MQTTClientBlockRewardedMessage>(Message);
 
-            Console.WriteLine($"[{DateTime.Now}][+] Block rewarded {StatsMessage.BlockRewarded}... {StatsMessage.NumWorkPaid}/{StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted} paid {(StatsMessage.PercentageTotal*100.0f).ToString("0.00")}% of next payout");
+            Console.WriteLine($"[{DateTime.Now}][+] Block rewarded {StatsMessage.BlockRewarded} {StatsMessage.NumWorkPaid}/{StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted} paid {(StatsMessage.PercentageTotal * 100.0f).ToString("0.00")}% of next payout");
         }
 
-        public void HandleHeartbeat()
+        public async Task HandleHeartbeat(string[] TopicPath, string Message)
         {
             _LastServerHeartbeat = DateTime.Now;
 
-            if(_Verbose)
+            if (_Verbose)
             {
                 Console.WriteLine($"[{DateTime.Now}][?] Heartbeat");
             }

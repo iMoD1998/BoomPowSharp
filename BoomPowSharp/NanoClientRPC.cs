@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace BoomPowSharp
@@ -12,7 +13,7 @@ namespace BoomPowSharp
     {
         private static SocketsHttpHandler _SocketHTTPHandler = new SocketsHttpHandler
         {
-            MaxConnectionsPerServer = 10,
+            MaxConnectionsPerServer = 20,
         };
 
         private static HttpClient            _WebClient       = new HttpClient(_SocketHTTPHandler);
@@ -151,7 +152,7 @@ namespace BoomPowSharp
             _WorkerUri = WorkerUri;
         }
 
-        public async Task<RPCGenerateWorkResponse> GenerateWork(string BlockHash, string Difficulty)
+        public async Task<RPCGenerateWorkResponse> GenerateWork(string BlockHash, string Difficulty, CancellationToken CancellationToken = default(CancellationToken))
         {
             var WorkGeneratePayload = new RPCGenerateWorkRequest
             {
@@ -160,7 +161,7 @@ namespace BoomPowSharp
                 Difficulty = Difficulty
             };
 
-            var HttpResult = await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions))).ConfigureAwait(false);
+            var HttpResult = await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions)), CancellationToken).ConfigureAwait(false);
 
             return await JsonSerializer.DeserializeAsync<RPCGenerateWorkResponse>(await HttpResult.Content.ReadAsStreamAsync());
         }
@@ -175,7 +176,7 @@ namespace BoomPowSharp
             return _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions)));
         }
 
-        public async Task<RPCValidateWorkResponse> ValidateWork( string BlockHash, string WorkResult, string Difficulty)
+        public async Task<RPCValidateWorkResponse> ValidateWork( string BlockHash, string WorkResult, string Difficulty, CancellationToken CancellationToken = default(CancellationToken))
         {
             var WorkGeneratePayload = new RPCValidateWorkRequest {
                 Action = "work_validate",
@@ -184,9 +185,9 @@ namespace BoomPowSharp
                 Difficulty = Difficulty
             };
 
-            var Response = await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions))).ConfigureAwait(false);
+            var Response = await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions)), CancellationToken).ConfigureAwait(false);
 
-            return await JsonSerializer.DeserializeAsync<RPCValidateWorkResponse>(await Response.Content.ReadAsStreamAsync(), SerializeOptions);
+            return await JsonSerializer.DeserializeAsync<RPCValidateWorkResponse>(await Response.Content.ReadAsStreamAsync());
         }
 
         public async Task<RPCBenchmarkResponse> Benchmark(int Count)
@@ -199,7 +200,7 @@ namespace BoomPowSharp
 
             var Response = await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions))).ConfigureAwait(false);
 
-            return await JsonSerializer.DeserializeAsync<RPCBenchmarkResponse>(await Response.Content.ReadAsStreamAsync(), SerializeOptions);
+            return await JsonSerializer.DeserializeAsync<RPCBenchmarkResponse>(await Response.Content.ReadAsStreamAsync());
         }
 
         public async Task<RPCStatusResponse> GetStatus( )
@@ -210,7 +211,7 @@ namespace BoomPowSharp
 
             var Response = await _WebClient.PostAsync(_WorkerUri, new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(WorkGeneratePayload, SerializeOptions))).ConfigureAwait(false);
 
-            return await JsonSerializer.DeserializeAsync<RPCStatusResponse>(await Response.Content.ReadAsStreamAsync(), SerializeOptions);
+            return await JsonSerializer.DeserializeAsync<RPCStatusResponse>(await Response.Content.ReadAsStreamAsync());
         }
     }
 }
