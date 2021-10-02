@@ -12,6 +12,7 @@ COPY --from=build-env /src/run.sh /app/run.sh
 RUN chmod +x /app/run.sh
 
 ENV WORKER_URL="http://127.0.0.1:20000"
+ENV MIN_DIFFICULTY=0
 ENV PAYOUT_ADDRESS="ban_1ncpdt1tbusi9n4c7pg6tqycgn4oxrnz5stug1iqyurorhwbc9gptrsmxkop"
 
 ENTRYPOINT ["/app/run.sh"]
