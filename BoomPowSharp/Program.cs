@@ -31,7 +31,7 @@ namespace BoomPowSharp
             RootCommand.Add(new Option<Uri>(
                 aliases: new string[] { "--worker-url", "-u" },
                 description: "URL of the nano work server.",
-                getDefaultValue: () => new Uri("http://127.0.0.1:20000")
+                getDefaultValue: () => new Uri("http://127.0.0.1:7000")
            ) { ArgumentHelpName = "URL" });
 
             RootCommand.Add(new Option<Uri>(
@@ -92,14 +92,22 @@ namespace BoomPowSharp
                                                                   .WithWebSocketServer($"{server.Host}:{server.Port}{server.LocalPath}")
                                                                   .WithCleanSession(false);
 
-                var BoomPow = new BoomPow(server.Scheme == "wss" ? BrokerOptions.WithTls() : BrokerOptions, workerUrl, payout, work, Convert.ToUInt64(minDifficulty, 16), verbose);
+                var Difficulty = Convert.ToUInt64(minDifficulty, 16);
+
+                if( Difficulty > 0xfffffff800000000)
+                {
+                    Console.WriteLine("Difficulty higher than nano live difficulty (0xfffffff800000000) clamping to 0xfffffff800000000");
+                    Difficulty = 0xfffffff800000000;
+                }
+
+                var BoomPow = new BoomPow(server.Scheme == "wss" ? BrokerOptions.WithTls() : BrokerOptions, workerUrl, payout, work, Difficulty, verbose);
 
                 Console.WriteLine("=======Config========");
                 Console.WriteLine($"Worker: {workerUrl}");
                 Console.WriteLine($"Server: {server}");
                 Console.WriteLine($"Payout Address: {payout}");
                 Console.WriteLine($"Desired Work: {work}");
-                Console.WriteLine($"Min Difficulty: {minDifficulty}");
+                Console.WriteLine($"Min Difficulty: {Difficulty.ToString("x16")}");
                 Console.WriteLine("=====================");
 
                 await BoomPow.Run();
