@@ -213,5 +213,20 @@ namespace BoomPowSharp
 
             return await JsonSerializer.DeserializeAsync<RPCStatusResponse>(await Response.Content.ReadAsStreamAsync());
         }
+
+        public async Task<bool> TestBlock()
+        {
+            var Block      = "718CC2121C3E641059BC1C2CFC45666C99E8AE922F7A807B7D07B62C995D79E2";
+            var Difficulty = "fffff80000000000";
+
+            var Work = await this.GenerateWork(Block, Difficulty);
+
+            if( Work.Error == null )
+            {
+                return Utils.NanoValidateWork(Utils.FromHex(Block), ulong.Parse(Difficulty, System.Globalization.NumberStyles.HexNumber), BitConverter.GetBytes(ulong.Parse(Work.WorkResult, System.Globalization.NumberStyles.HexNumber)));
+            }
+
+            return false;
+        }
     }
 }

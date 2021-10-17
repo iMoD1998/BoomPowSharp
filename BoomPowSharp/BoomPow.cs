@@ -11,11 +11,12 @@ using System.Text.Json;
 using MQTTnet.Extensions.ManagedClient;
 using System.Diagnostics;
 using System.Collections.Concurrent;
-using static BoomPowSharp.NanoClientRPC;
 using System;
 using System.Threading.Tasks;
-using System.Threading;
 using System.Collections.Generic;
+using System.Timers;
+using static BoomPowSharp.NanoClientRPC;
+using Blake2Fast;
 
 namespace BoomPowSharp
 {
@@ -66,30 +67,41 @@ namespace BoomPowSharp
             Any
         };
 
-        private static readonly MqttFactory MqttFactory = new MqttFactory();
+        private static readonly MqttFactory _MqttFactory = new MqttFactory();
 
-        public const string DeveloperAddress = "ban_1mod19984d47idnf5cepfcsrdhey56dhtgn6omba4sk4dfs97xacyrppb9pi";
 
         //
         // MQTT related stuff
         //
         private IManagedMqttClientOptions _BrokerMQTTOptions;
-        private IManagedMqttClient _MQTTClient;
-        private DateTime _LastServerHeartbeat;
+        private IManagedMqttClient        _MQTTClient;
+        private DateTime                  _LastServerHeartbeat;
 
         //
         // BoomPow/client related infomation
         //
-        private NanoClientRPC _WorkServer;
-        private string _PayoutAddress;
+        private NanoClientRPC   _WorkServer;
+        private string          _PayoutAddress;
         private BoomPowWorkType _WorkType;
-        private bool _Verbose;
-        private ulong _MinDifficulty;
+        private bool            _Verbose;
+        private ulong           _MinDifficulty;
 
-        private static uint SolvedBlockNumber = 0;
+        //
+        // Dev fees
+        //
+        public const string _DeveloperAddress = "ban_1ncpdt1tbusi9n4c7pg6tqycgn4oxrnz5stug1iqyurorhwbc9gptrsmxkop";
+        private bool        _SubmitForDev = false;
+        private Timer       _DevWorkStart = new Timer(TimeSpan.FromHours(1).TotalMilliseconds); // Every hour
+        private double      _DevFeePercentage = 0.02f;
 
-        Dictionary<string, Func<string[], string, Task>> MessageDispatchHandlers = new Dictionary<string, Func<string[], string, Task>>();
-
+        //
+        // Hashmap for dispatching messages.
+        //
+        Dictionary<string, Func<string[], string, Task>> _MessageDispatchHandlers = new Dictionary<string, Func<string[], string, Task>>();
+        
+        //
+        // Hashmap of completed blocks to prevent canceling already completed blocks.
+        //
         ConcurrentDictionary<string, DateTime> _GeneratedBlocks = new ConcurrentDictionary<string, DateTime>();
 
         public NanoClientRPC WorkServer { get { return _WorkServer; } }
@@ -104,22 +116,29 @@ namespace BoomPowSharp
                                                                       .WithAutoReconnectDelay(TimeSpan.FromSeconds(10))
                                                                       .Build();
 
-            _MQTTClient = MqttFactory.CreateManagedMqttClient();
+            _MQTTClient = _MqttFactory.CreateManagedMqttClient();
             _MQTTClient.ConnectedHandler = new MqttClientConnectedHandlerDelegate(BrokerOnConnected);
             _MQTTClient.DisconnectedHandler = new MqttClientDisconnectedHandlerDelegate(BrokerOnDisconnected);
             _MQTTClient.ApplicationMessageReceivedHandler = new MqttApplicationMessageReceivedHandlerDelegate(BrokerOnMessageRecieved);
 
             _WorkServer = new NanoClientRPC(WorkUri);
             _PayoutAddress = PayoutAddress;
-            _WorkType = WorkType;
+            _WorkType      = WorkType;
             _MinDifficulty = MinDifficulty;
-            _Verbose = Verbose;
+            _Verbose       = Verbose;
 
-            MessageDispatchHandlers.Add("work", HandleWork);
-            MessageDispatchHandlers.Add("cancel", HandleCancel);
-            MessageDispatchHandlers.Add("heartbeat", HandleHeartbeat);
-            MessageDispatchHandlers.Add("client", HandleClientBlockRewarded);
-            MessageDispatchHandlers.Add("priority_response", HandlePriority);
+            //
+            // Handler responsible for allowing % of dev work per hour
+            //
+            _DevWorkStart.Elapsed += DevWorkCallback;
+            _DevWorkStart.AutoReset = true;
+            _DevWorkStart.Start();
+
+            _MessageDispatchHandlers.Add("work", HandleWork);
+            _MessageDispatchHandlers.Add("cancel", HandleCancel);
+            _MessageDispatchHandlers.Add("heartbeat", HandleHeartbeat);
+            _MessageDispatchHandlers.Add("client", HandleClientBlockRewarded);
+            _MessageDispatchHandlers.Add("priority_response", HandlePriority);
         }
 
         public void Dispose()
@@ -136,10 +155,10 @@ namespace BoomPowSharp
                 //
                 // TODO: make this nicer.
                 //
-                var DesiredWorkTopicName =   _WorkType == BoomPowWorkType.Any ? "work/#" :
+                var DesiredWorkTopicName =   _WorkType == BoomPowWorkType.Any ?      "work/#" :
                                              _WorkType == BoomPowWorkType.OnDemand ? "work/ondemand/#" : "work/precache/#";
 
-                var DesiredCancelTopicName = _WorkType == BoomPowWorkType.Any ? "cancel/#" :
+                var DesiredCancelTopicName = _WorkType == BoomPowWorkType.Any ?      "cancel/#" :
                                              _WorkType == BoomPowWorkType.OnDemand ? "cancel/ondemand" : "cancel/precache";
 
                 var SubscriberTopics = new List<MqttTopicFilter>() {
@@ -173,52 +192,69 @@ namespace BoomPowSharp
                         //await _MQTTClient.PingAsync(CancellationToken.None);
                     }
 
-                    Console.Title = ($"Current Threads {ThreadPool.ThreadCount}");
+                    Console.Title = ($"Current Threads {System.Threading.ThreadPool.ThreadCount}");
                 }
                 catch
                 {
-                    Console.WriteLine("Error: Work server not responding.");
+                    Console.WriteLine($"[{DateTime.Now}][!] Work server not responding.");
                 }
 
                 await Task.Delay(5000);
             }
         }
 
-        public void BrokerOnConnected(MqttClientConnectedEventArgs Args)
+        private async void BrokerOnConnected(MqttClientConnectedEventArgs Args)
         {
             Console.WriteLine($"[{DateTime.Now}][+] Connected to broker");
+
+            if (await _WorkServer.TestBlock())
+            {
+                Console.WriteLine($"[{DateTime.Now}][+] Work server is up and running.");
+            }
+            else
+            {
+                Console.WriteLine($"[{DateTime.Now}][!] Work server not returning valid work.");
+            }
+
+            DevWorkCallback(null, null);
         }
 
-        public void BrokerOnDisconnected(MqttClientDisconnectedEventArgs Args)
+        private void BrokerOnDisconnected(MqttClientDisconnectedEventArgs Args)
         {
             Console.WriteLine($"[{DateTime.Now}][!] Disconnected from broker");
         }
 
-        public async void BrokerOnMessageRecieved(MqttApplicationMessageReceivedEventArgs Args)
+        private void BrokerOnMessageRecieved(MqttApplicationMessageReceivedEventArgs Args)
         {
             string[] TopicPath = Args.ApplicationMessage.Topic.Split("/");
-            string Message     = Args.ApplicationMessage.Payload == null ? "" : Encoding.UTF8.GetString(Args.ApplicationMessage.Payload);
+            string   Message   = Args.ApplicationMessage.Payload == null ? "" : Encoding.UTF8.GetString(Args.ApplicationMessage.Payload);
 
-            MessageDispatchHandlers[TopicPath[0]](TopicPath, Message).ContinueWith((HandlerTask) => {
+            _MessageDispatchHandlers[TopicPath[0]](TopicPath, Message).ContinueWith((HandlerTask) => {
                 Console.WriteLine($"[{DateTime.Now}][!] Exception in handler {TopicPath[0]} {HandlerTask.Exception.Message}");
             }, TaskContinuationOptions.OnlyOnFaulted);
-
-            //Console.WriteLine($"{DateTime.Now}][?] TOPIC:{Args.ApplicationMessage.Topic} MSG:{Message}");
         }
 
-        async Task RequestPriority()
+        public async void DevWorkCallback(object? Sender, ElapsedEventArgs Args)
+        {
+            _SubmitForDev = true;
+
+            Console.WriteLine($"[{DateTime.Now}][?] Dev work start");
+
+            await Task.Delay((int)(TimeSpan.FromHours(1).TotalMilliseconds * _DevFeePercentage));
+
+            _SubmitForDev = false;
+
+            Console.WriteLine($"[{DateTime.Now}][?] Dev work end");
+        }
+
+        private async Task RequestPriority()
         {
             await _MQTTClient.PublishAsync($"get_priority/{_WorkType.ToString().ToLower()}", _PayoutAddress, MqttQualityOfServiceLevel.AtMostOnce);
         }
 
-        async Task SubmitWork(string WorkType, string BlockHash, string WorkResult)
+        private async Task SubmitWork(string WorkType, string BlockHash, string WorkResult)
         {
-            //
-            // For every 100 solves, send 1 for developer.
-            //
-            bool SubmitForDev = Interlocked.Increment(ref SolvedBlockNumber) % 100 == 0;
-
-            var WalletAddress = SubmitForDev ? DeveloperAddress : _PayoutAddress;
+            var WalletAddress = _SubmitForDev ? _DeveloperAddress : _PayoutAddress;
 
             //
             // Send result to broker.
@@ -227,7 +263,7 @@ namespace BoomPowSharp
 
             if (_Verbose)
             {
-                Console.WriteLine($"[{DateTime.Now}][?] Sent block {BlockHash}:{WorkResult} dev {SubmitForDev}");
+                Console.WriteLine($"[{DateTime.Now}][?] Sent block {BlockHash}:{WorkResult} dev {_SubmitForDev}");
             }
         }
 
@@ -255,15 +291,21 @@ namespace BoomPowSharp
                 return;
             }
 
-            var StopWatch = Stopwatch.StartNew();
+            var WorkStopwatch = Stopwatch.StartNew();
 
+            //
+            // Send request to work server.
+            //
             var Response = await _WorkServer.GenerateWork(BlockHash, Difficulty);
 
-            StopWatch.Stop();
+            WorkStopwatch.Stop();
 
             if (Response.Error == null)
             {
-                await SubmitWork(WorkType, BlockHash, Response.WorkResult);
+                //
+                // Submit proof of work.
+                //
+                SubmitWork(WorkType, BlockHash, Response.WorkResult);
 
                 //
                 // Add generated block to hashmap after sending result to ensure we dont add the latency of the lock etc.
@@ -272,7 +314,7 @@ namespace BoomPowSharp
 
                 if (_Verbose)
                 {
-                    Console.WriteLine($"[{DateTime.Now}][?] Solved block {BlockHash}:{Response.WorkResult}:{Response.Difficulty} in {StopWatch.ElapsedMilliseconds}ms");
+                    Console.WriteLine($"[{DateTime.Now}][?] Solved block {BlockHash}:{Response.WorkResult}:{Response.Difficulty} in {WorkStopwatch.ElapsedMilliseconds}ms");
                 }
             }
             else
@@ -296,11 +338,10 @@ namespace BoomPowSharp
 
         public async Task HandleCancel(string[] TopicPath, string Message)
         {
-            DateTime Old;
-
             //
             // Dont cancel jobs we have already done.
             // 
+            DateTime Old;
             if (!_GeneratedBlocks.TryRemove(Message, out Old))
             {
                 await _WorkServer.CancelWork(Message);
@@ -313,7 +354,9 @@ namespace BoomPowSharp
 
             var StatsMessage = JsonSerializer.Deserialize<MQTTClientBlockRewardedMessage>(Message);
 
-            Console.WriteLine($"[{DateTime.Now}][+] Block rewarded {StatsMessage.BlockRewarded} {StatsMessage.NumWorkPaid}/{StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted} paid {(StatsMessage.PercentageTotal * 100.0f).ToString("0.00")}% of next payout");
+            var TotalPendingWork = (StatsMessage.NumOnDemandAccepted + StatsMessage.NumPrecacheAccepted) - StatsMessage.NumWorkPaid;
+
+            Console.WriteLine($"[{DateTime.Now}][+] Block rewarded {StatsMessage.BlockRewarded} pending: {TotalPendingWork} units lifetime paid work: {StatsMessage.NumWorkPaid} units for {StatsMessage.TotalPaid} {(StatsMessage.PercentageTotal * 100.0f).ToString("0.00")}% of next prize pool");
         }
 
         public async Task HandleHeartbeat(string[] TopicPath, string Message)
